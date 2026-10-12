@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+saves/
+replays/
+runtime.log*
+archive_patches/
+.idea/
+.vscode/
+项目记忆.md
