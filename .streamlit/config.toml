@@ -1,7 +1,6 @@
-[runner]
-fastReruns = false
+[client]
+showErrorDetails = true
+toolbarMode = "viewer"
 
-[global]
-# 长局会发生数百次 rerun。把消息哈希保留更久，降低慢速浏览器标签页请求到
-# 已被服务端淘汰的 ForwardMsg（Cached ForwardMsg MISS）的概率。
-maxCachedMessageAge = 50
+[logger]
+level = "info"
