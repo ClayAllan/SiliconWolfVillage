@@ -1,7 +1,7 @@
 [project]
 name = "silicon-wolf-village"
 version = "0.1.0"
-description = "12-player AI Werewolf game with Streamlit observability"
+description = "12-player AI Werewolf game with dual-model factions, god-view spectator, real-time reasoning, voting & replay analysis on Streamlit"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
