@@ -2,8 +2,7 @@
 
 **十二个 AI 同桌玩狼人杀，你在上帝视角看它们推理、伪装、投票和翻盘。**
 
-本发布版由访客填写自己的 API Key，可分别选择好人和狼人使用的模型。
-规则由 Python 引擎裁决，模型负责发言、推理和行动选择。
+本项目是一个 12 人 AI 狼人杀观战应用，支持好人/狼人阵营双模型、上帝视角实时监控、结构化发言、投票与复盘分析，基于 Python + Streamlit 构建。访客可在前端填写自己的 API Key，直接接入 OpenAI 兼容的模型服务。
 
 ## 网页部署
 
@@ -53,11 +52,11 @@ python -m unittest discover -s tests -v
 
 ## 运行架构
 
-`GameEngine.run()` 是逐事件 `yield` 的生成器。玩家请求和按体量触发的记忆压缩都在后台 Future 中运行；Streamlit 使用单一整页刷新通道，等待 Future 时至少间隔 1.5 秒轮询，避免 fragment 与整页 rerun 竞态，同时仍可安全地跳过当前玩家。
+`GameEngine.run()` 是逐事件 `yield` 的生成器。玩家请求和按体量触发的记忆压缩都在后台 Future 中运行；Streamlit 使用单一整页刷新通道，等待 Future 时不阻塞主线程。
 
-同一会话的 `next(gen)` 由真正的 `threading.Lock` 互斥保护。跳过操作只会使当前 `request_id` 失效并写入兜底结果，不会强制重入生成器；迟到的 API 响应会被丢弃，不会污染后续记忆。
+同一会话的 `next(gen)` 由真正的 `threading.Lock` 互斥保护。跳过操作只会使当前 `request_id` 失效并写入兜底结果，不会强制重入生成器；迟到的 API 响应会被丢弃，不会污染后续回合。
 
-所有真实死亡统一经过 `GameEngine._mark_dead()` / `_mark_dead_batch()`，死亡落地后立即执行胜负判定。批量夜间死亡仍按同一批次结算，保留狼刀在先与连环死亡语义。
+所有真实死亡统一经过 `GameEngine._mark_dead()` / `_mark_dead_batch()`，死亡落地后立即执行胜负判定。批量夜间死亡仍按同一批次结算，保留狼刀在先与连环驱逐、神职/平民死亡顺序等细节。
 
 ## 文件结构
 
@@ -92,7 +91,7 @@ streamlit run app.py
 - `session.json` / `runtime.log`：开局配置、随机种子和本局人类可读运行记录；不会保存 API Key。
 - `final_state.json` / `manifest.json` / `summary.md`：终局全量快照、代码与 Prompt 哈希、完整日票型、缓存/推理/摘要 Token 成本、样本质量和精简复盘。
 
-根目录的 `replays/index.csv` 汇总新旧档案，便于按胜负、模型、兜底率、token、放逐命中率和狼人自爆数做跨局分析。V2 会把 API 大面积兜底或触发熔断的对局标为无效样本，避免把服务故障误判成 Prompt 战术问题。旧版根目录 `.json/.md` 保留不动，并自动纳入索引。
+根目录的 `replays/index.csv` 汇总新旧档案，便于按胜负、模型、兜底率、token、放逐命中率和狼人自爆数做跨局分析。
 
 ## 故障处理
 
@@ -100,7 +99,7 @@ streamlit run app.py
 - 连续 3 个完整玩家请求失败：触发 API 熔断并暂停自动推演，防止断网时整局以“过/弃权”跑成无效样本。
 - 模型超时：当前行动返回“过/弃权”，流程继续；超时上限可在侧边栏调整。
 - 单个玩家卡住：点击“跳过当前玩家”，当前请求立即失效，迟到结果不会写入记忆。
-- 控制台反复出现 `WebSocketClosedError`、`Cached ForwardMsg MISS` 或 fragment 不存在：先执行 `pip install -r requirements.txt` 升级到 Streamlit 1.57，再完全关闭旧服务后重启。项目已禁用 `fastReruns`、延长消息缓存寿命、取消高频计时 iframe，并默认只渲染频道尾部；完整记录始终保存在对局归档中。
+- 控制台反复出现 `WebSocketClosedError`、`Cached ForwardMsg MISS` 或 fragment 不存在：先执行 `pip install -r requirements.txt` 升级到 Streamlit 1.57，再完全关闭旧服务并重启。
 - 排查长局：侧边栏查看或下载 `runtime.log`。重点搜索 `ASK`、`API→`、`API✓`、`API✗`、`SKIP`、`DEATH` 和 `STEP✗`。
 - 存档只允许在没有后台任务时进行；读档会重建引擎并从下一夜的干净边界继续。
 
@@ -111,4 +110,4 @@ $env:PYTHONDONTWRITEBYTECODE = "1"
 python -m unittest discover -s tests -v
 ```
 
-测试覆盖取消后迟到结果隔离、402 不重试、连续失败熔断、结构化自爆判定、事实账本主客体不串位、实时 JSONL、记忆压缩非阻塞与按量跳过、生成器等待/跳过、统一死亡入口和即时胜负判定。
+测试覆盖取消后迟到结果隔离、402 不重试、连续失败熔断、结构化自爆判定、事实账本主客体不串位、实时 JSONL、记忆压缩非阻塞与按量跳过、生死结算和跨局索引等关键路径。
