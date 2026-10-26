@@ -63,12 +63,12 @@ class DisplayReplay:
     def _pack(self, view, audience, engine):
         view = copy.deepcopy(view)
         view["public_log"] = self._pack_rows(
-            view["public_log"], (audience, "public"), id(engine.public_log)
+            view["public_log"], (audience, "public"), engine.public_log
         )
         reasoning_sources = getattr(engine, "reasoning_log", {}) or {}
         view["reasoning_log"] = {
             seat: self._pack_rows(
-                rows, (audience, "reasoning", seat), id(reasoning_sources.get(int(seat), []))
+                rows, (audience, "reasoning", seat), reasoning_sources.get(int(seat), [])
             )
             for seat, rows in view["reasoning_log"].items()
         }
@@ -78,7 +78,7 @@ class DisplayReplay:
         # Reuse an immutable prefix for append-only engine logs. A replacement list
         # (for example after load_state) invalidates the cache and rebuilds safely.
         cached = self._row_chain_cache.get(cache_key) if cache_key is not None else None
-        if cached and cached["source_id"] == source_id and cached["length"] <= len(rows):
+        if cached and cached["source"] is source_id and cached["length"] <= len(rows):
             start, tail = cached["length"], cached["tail"]
         else:
             start, tail = 0, None
@@ -90,7 +90,7 @@ class DisplayReplay:
             tail = self._sequence_nodes[pair]
         if cache_key is not None:
             self._row_chain_cache[cache_key] = {
-                "source_id": source_id, "length": len(rows), "tail": tail,
+                "source": source_id, "length": len(rows), "tail": tail,
             }
         return tail
 
