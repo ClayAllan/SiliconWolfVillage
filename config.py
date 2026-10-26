@@ -7,6 +7,7 @@ config.py —— 全局配置中心
 """
 
 import os
+from roles import ROLE_CLASSES
 
 # ============================================================
 # 一、大模型 API 配置（兼容 OpenAI 格式，默认适配 DeepSeek）
@@ -65,8 +66,16 @@ SUMMARY_MAX_CHARS = 700
 # 兼容保留（已被 AGENT_TIMEOUT 取代为主要超时来源）
 REQUEST_TIMEOUT = 60
 
-# 失败自动重试次数（容错机制核心参数）
-MAX_RETRIES = 3
+# 每个完整行动最多调用两次（含首次），共用 AGENT_TIMEOUT 墙钟预算。
+MAX_RETRIES = 2
+
+# 生成预算包括隐式推理；预算不足时仅允许一次有限扩容。
+QUICK_OUTPUT_TOKENS = 4096
+QUICK_REPAIR_TOKENS = 6144
+ACTION_OUTPUT_TOKENS = 8192
+ACTION_REPAIR_TOKENS = 12288
+SUMMARY_OUTPUT_TOKENS = 1200
+DIAGNOSTIC_OUTPUT_TOKENS = 256
 
 # 连续多少个【完整玩家请求】失败后暂停本局。防止供应商整体断线时，12名玩家全部用兜底继续跑出无效样本。
 API_CIRCUIT_BREAKER_THRESHOLD = 3
@@ -108,8 +117,9 @@ DEFAULT_BOARD = "12人标准预女猎守"
 
 # 神职阵营（屠边局判负用）：神全死 或 民全死 → 狼胜。
 #   ⚠️守墓人/骑士/丘比特都是【神职】，必须计入；狼美人/白狼王是【狼】(camp)，不在这里。
-#   说明：本作丘比特采用【纯情侣双死】——不引入情侣独立阵营，屠边判负仍按 camp/神民计数。
-GOD_ROLES = {"预言家", "女巫", "猎人", "守卫", "守墓人", "骑士", "丘比特"}
+#   跨阵营情侣存活时，由引擎优先处理情侣第三方胜负。
+#   从角色注册表派生，新增神职无需再维护第二份名单。
+GOD_ROLES = frozenset(name for name, cls in ROLE_CLASSES.items() if cls.is_god)
 
 # 给每个 AI 随机分配的“说话风格”，增加观赏性与多样性
 STYLE_POOL = [
@@ -128,20 +138,8 @@ STYLE_POOL = [
 ]
 
 # 身份对应的头像 emoji（上帝视角圆桌用）
-ROLE_EMOJI = {
-    "狼人": "🐺",
-    "白狼王": "👑",
-    "狼美人": "💋",
-    "平民": "👤",
-    "预言家": "🔮",
-    "女巫": "🧪",
-    "猎人": "🏹",
-    "守卫": "🛡️",
-    "守墓人": "🪦",
-    "骑士": "🐎",
-    "丘比特": "💘",
-    "未知": "❓",
-}
+ROLE_EMOJI = {name: cls.emoji for name, cls in ROLE_CLASSES.items()}
+ROLE_EMOJI["未知"] = "❓"
 
 # ============================================================
 # 四、运行日志（排查“卡顿/超时/崩溃”用）

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from game_archive import _usage_totals, archive_game, should_archive
+from game_archive import _usage_totals, archive_game, game_statistics, should_archive
 
 
 class FakeManager:
@@ -51,6 +51,32 @@ class FakeEngine:
 
 
 class ArchiveTests(unittest.TestCase):
+    def test_zero_vote_accuracy_keeps_its_actual_denominator(self):
+        engine = FakeEngine()
+        engine.players[3] = {"role": "平民", "alive": True}
+        engine.public_log = [{"kind": "votechart", "title": "D1 放逐", "totals": {},
+                              "votes": {1: 2, 2: 3, 3: 2}, "winner": 2}]
+        analysis = game_statistics(engine)
+        accuracy = analysis["observed_metrics"]["good_vote_accuracy"]
+        self.assertEqual(accuracy["value"], 0.0)
+        self.assertEqual((accuracy["numerator"], accuracy["denominator"]), (0, 2))
+        self.assertEqual(analysis["observed_metrics"]["wolf_vote_good_rate"]["value"], 1.0)
+        self.assertIsNone(analysis["tactical_radar"])
+
+    def test_missing_votes_are_unknown_and_never_given_default_scores(self):
+        engine = FakeEngine()
+        engine.public_log = []
+        for metric in game_statistics(engine)["observed_metrics"].values():
+            self.assertIsNone(metric["value"])
+            self.assertEqual(metric["denominator"], 0)
+        self.assertTrue(any("无法评估" in flag for flag in game_statistics(engine)["prompt_tuning_flags"]))
+
+    def test_legacy_record_without_role_objects_recognizes_ghost_rider(self):
+        engine = FakeEngine()
+        engine.players[1]["role"] = "恶灵骑士"
+        analysis = game_statistics(engine)
+        self.assertEqual(analysis["observed_metrics"]["good_vote_accuracy"]["value"], 1.0)
+
     def test_completed_game_is_archived_once_as_v2_folder(self):
         engine = FakeEngine()
         with tempfile.TemporaryDirectory() as directory:

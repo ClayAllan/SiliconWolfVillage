@@ -3,7 +3,7 @@
 game_engine.py —— 狼人杀状态机引擎（V3.0 高配面杀）
 ==================================================
 核心理念：规则由 Python 绝对控制，AI 只是“演员”。
-生成器架构不变：每个“可观看步骤”就 yield 一次，前端 next() 一步、重渲一次。
+生成器架构：每个“可观看步骤”yield 一次，由 GameService 在后台推进，前端读取快照。
 
 V3.0 新增（均不破坏 yield 状态机与硬超时防卡死）：
   · 警长竞选状态机：election_state 0未开始/1竞选中/2已顺延/3已有警长/4徽毁。
@@ -27,18 +27,16 @@ from datetime import datetime
 import config
 from replay_recorder import GameRecorder
 # ★V6.3 角色多态：解析工具与角色类下沉到 roles.py（roles 不反向 import 本模块 → 无循环依赖）
-from roles import create_role, parse_seat
+from roles import create_role, parse_seat, validate_board_roles
 
 
 # ============================================================
 # 狼队“刀法心理博弈”战术警告（夜间讨论 & 落刀两处共用，防无脑刀明跳神）
 # ============================================================
 WOLF_KILL_TACTICS = (
-    "⚠️【狼守博弈·别无脑刀神】若守卫/猎人/女巫大概率仍存活，你们必须算计今晚与神职的博弈："
-    "别无脑去刀【明跳的预言家/女巫】——刀预言家/女巫极易被守卫守住，白送一刀【守出平安夜】；"
-    "刀女巫可能【反被泼毒】、刀猎人会在白天【被开枪带走】，等于替好人换掉你们一张牌。"
-    "也要掂量自己是否已被猎人/女巫看出身份，据此决定要不要落刀在他们身上。"
-    "更稳的选择：【刀边缘外置位】、或继续【深水倒钩】伪装好人，别把刀白白送出去。"
+    "【狼队落刀】比较关键技能威胁、守救概率、猎枪风险与屠边进度。"
+    "明跳神职可能被保护，也可能是最高收益刀口；边缘位不自动更安全。"
+    "只根据本局实际存在角色和已知信息决策，不把未公开的底牌当作公开共识。"
 )
 
 
@@ -60,6 +58,9 @@ class GameEngine:
         # ---- 可渲染状态（前端只读这些）----
         self.players: dict[int, dict] = {}
         self.public_log: list[dict] = []
+        self.published_alive = {}
+        self.public_speaker = None
+        self.war_board_recipients = []
         self.reasoning_log = {i: [] for i in range(1, 13)}
         self.current_speaker = None
         self.phase = "准备中"
@@ -106,7 +107,9 @@ class GameEngine:
     # ========================================================
     def setup(self, board_roles=None):
         # ★V6.4：板子可切换。board_roles 为身份列表(12个)；不传则用默认板子。
-        src = list(board_roles) if board_roles else list(config.GAME_BOARDS[config.DEFAULT_BOARD])
+        src = validate_board_roles(
+            config.GAME_BOARDS[config.DEFAULT_BOARD] if board_roles is None else board_roles
+        )
         # ★V6.6.2：按【本局真实板子】生成身份名单，注入 System Prompt(治变体板被告知"白狼王不存在"的降智)。
         self._roster = "、".join(f"{r}×{src.count(r)}" for r in dict.fromkeys(src))
         roles = list(src)
@@ -128,6 +131,7 @@ class GameEngine:
             if self.roles[s].camp != "狼人":
                 self.role_seats[self.players[s]["role"]] = s
 
+        self.published_alive = {s: True for s in self.players}
         # 先彻底清空所有 AI 记忆，确保全新对局
         self.manager.clear()
         for seat in range(1, 13):
@@ -324,6 +328,8 @@ class GameEngine:
         if not player or not player.get("alive"):
             return False
         player["alive"] = False
+        if "夜" not in cause and "夜" not in self.phase and "读档" not in cause:
+            self.published_alive[seat] = False
         config.get_logger().info(f"DEATH seat={seat} role={player.get('role')} cause={cause or '未标注'}")
         self._record_event(
             "player_died",
@@ -351,29 +357,35 @@ class GameEngine:
             self._record_event("engine_yield", yield_event=event)
         return event
 
+    def _append_public_item(self, item):
+        # 同局递增序号用于跨局隔离、滚动游标和归档定位。
+        self._public_event_seq = getattr(self, "_public_event_seq", len(self.public_log)) + 1
+        item.update(game_id=self.game_id, event_seq=self._public_event_seq)
+        self.public_log.append(item)
+
     def _log_judge(self, text):
         item = {"kind": "judge", "text": text, "phase": self.phase}
-        self.public_log.append(item)
+        self._append_public_item(item)
         self._record_event("public_log", entry=item)
 
     def _log_god(self, text):
         item = {"kind": "god", "text": text, "phase": self.phase}
-        self.public_log.append(item)
+        self._append_public_item(item)
         self._record_event("public_log", entry=item)
 
     def _log_player(self, seat, text):
         item = {"kind": "player", "seat": seat, "role": self.players[seat]["role"],
                 "text": text, "phase": self.phase}
-        self.public_log.append(item)
+        self._append_public_item(item)
         self._capture_public_claims(seat, text)
         self._record_event("public_log", entry=item)
 
     def _log_win(self, text):
         item = {"kind": "win", "text": text, "phase": self.phase}
-        self.public_log.append(item)
+        self._append_public_item(item)
         self._record_event("public_log", entry=item)
 
-    def _log_votechart(self, title: str, totals: dict, votes: dict, winner):
+    def _log_votechart(self, title: str, totals: dict, votes: dict, winner, decision_sources=None):
         """把一轮票型存成【结构化记录】并按顺序内嵌进 public_log，供前端画横向柱状图。
         JSON 友好：键全部转 int(读档后是 str，前端渲染时会再 coerce 一次，双保险)。"""
         item = {
@@ -382,8 +394,9 @@ class GameEngine:
             "votes": {int(k): int(v) for k, v in (votes or {}).items()},
             "winner": (int(winner) if winner else None),
             "sheriff": self.sheriff,
+            "decision_sources": dict(decision_sources or {}),
         }
-        self.public_log.append(item)
+        self._append_public_item(item)
         self._record_event("vote_result", entry=item)
 
     def _record_reasoning(self, seat, label, reasoning, speech, response=None, request_id=None):
@@ -474,6 +487,8 @@ class GameEngine:
         ]
         if role.camp == "狼人":
             lines.append("- 你的真实狼队友：" + "、".join(f"{s}号" for s in self.wolves) + "。")
+        if self.lovers and (seat in self.lovers or role.role_name == "丘比特"):
+            lines.append(f"- 你合法知晓的情侣关系：{self.lovers[0]}号与{self.lovers[1]}号；这不揭示对方底牌。")
         if self.confirmed_roles:
             confirmed = "；".join(
                 f"{s}号={info['role']}（{info['reason']}）"
@@ -568,6 +583,8 @@ class GameEngine:
                                  "style": p.get("style", ""), "memory": p.get("memory", "")}
                         for s, p in self.players.items()},
             "public_log": self.public_log,
+            "published_alive": self.published_alive,
+            "war_board_recipients": self.war_board_recipients,
             "reasoning_log": {str(s): v for s, v in self.reasoning_log.items()},
             "phase": self.phase,
             "day": self.day,
@@ -597,6 +614,8 @@ class GameEngine:
 
     def load_state(self, data: dict):
         data = data or {}
+        self.published_alive = {int(k): v for k, v in data.get("published_alive", {}).items()}
+        self.war_board_recipients = list(data.get("war_board_recipients", []))
         self.game_id = data.get("game_id") or self.game_id
         self.started_at = data.get("started_at") or self.started_at
         self.board_name = data.get("board_name", "") or ""
@@ -610,6 +629,17 @@ class GameEngine:
             self.players[int(s)] = {"role": p.get("role", "未知"), "alive": bool(p.get("alive", True)),
                                     "style": p.get("style", ""), "memory": p.get("memory", "")}
         self.public_log = list(data.get("public_log", []) or [])
+        # 只有明确的整局读档入口可以为旧日志绑定归属；已带外局ID的行保留供投影层隔离。
+        self._public_event_seq = 0
+        for index, original in enumerate(self.public_log):
+            row = dict(original)
+            row.setdefault("game_id", self.game_id)
+            sequence = row.get("event_seq")
+            if type(sequence) is not int or sequence <= self._public_event_seq:
+                sequence = self._public_event_seq + 1
+            row["event_seq"] = sequence
+            self._public_event_seq = sequence
+            self.public_log[index] = row
         self.reasoning_log = {int(s): list(v or []) for s, v in (data.get("reasoning_log") or {}).items()}
         for i in range(1, 13):
             self.reasoning_log.setdefault(i, [])
@@ -703,10 +733,85 @@ class GameEngine:
     # 通用“问一个 AI”的子生成器：Future 轮询 + 多次 yield。
     # 每次 next() 都会快速返回；API 在后台执行，Streamlit 主线程不再长时间阻塞。
     # ========================================================
-    def _ask(self, seat: int, prompt: str, label: str, public: bool = False, response_kind: str = "speech"):
+    def _action_context(self, seat, kind, allowed_targets=None):
+        alive = set(self.alive_seats())
+        role = self.roles[seat]
+        context = {"allowed_flags": [], "skill_targets": sorted(alive - {seat}),
+                   "explosion_requires_target": role.role_name == "白狼王"}
+        daytime = "夜" not in self.phase and (self.day > 0)
+        if daytime and seat in alive:
+            if role.camp == "狼人" and role.role_name not in {"恶灵骑士", "狼美人"}:
+                context["allowed_flags"].append("is_explode")
+            if role.role_name == "骑士" and not getattr(role, "has_dueled", False):
+                context["allowed_flags"].append("is_duel")
+        targets = None
+        if kind in {"check", "poison", "hunt", "charm", "dream", "badge_target"}:
+            targets = alive - {seat}
+        if kind in {"poison", "hunt", "badge_target"}:
+            targets.add(0)
+        if kind == "charm":
+            targets.discard(getattr(role, "charm_target", None))
+        if kind == "guard":
+            targets = (alive - {getattr(role, "last_guarded", None)}) | {0}
+        if kind in {"link", "swap"}:
+            targets = alive
+        if kind in {"vote", "consolidation"}:
+            targets = alive if "夜" in self.phase else alive - {seat}
+            targets = targets | {0}
+        if allowed_targets is not None:
+            targets = set(allowed_targets)
+        if targets is not None:
+            context["allowed_targets"] = sorted(targets)
+        return context
+
+    def _public_evidence(self):
+        # 公共日志中 role 是全知字段，严禁传入玩家记忆。
+        return [{"id": i + 1, "phase": row.get("phase", ""),
+                 "seat": row["seat"], "text": row.get("text", "")}
+                for i, row in enumerate(self.public_log) if row.get("kind") == "player"]
+
+    @staticmethod
+    def _decision_source(resp, target=None, legal=None):
+        source = resp.get("decision_source")
+        if resp.get("_is_fallback"):
+            return source if source == "manual_skip" else "technical_fallback"
+        if legal is not None and target not in legal:
+            return "invalid_target"
+        return source or "model"
+
+    @staticmethod
+    def _vote_detail(detail, sources):
+        for seat, source in sources.items():
+            if source != "model":
+                reason = {"technical_fallback": "技术性未提交", "manual_skip": "人工跳过",
+                          "invalid_target": "无效目标"}.get(source, "未提交")
+                detail = re.sub(r"(?<!\d)" + re.escape(f"{seat}号->弃票"),
+                                f"{seat}号->{reason}（不代表主动弃票）", detail)
+        return detail
+
+    @staticmethod
+    def _action_display(kind, response):
+        if response.get("_is_fallback"):
+            return "【人工跳过】" if response.get("decision_source") == "manual_skip" else "【技术性未提交】"
+        if kind in {"check", "guard", "poison", "hunt", "charm", "dream"}:
+            target = response.get("vote_target", 0)
+            verb = {"check": "查验", "guard": "守护", "poison": "毒", "hunt": "开枪", "charm": "魅惑", "dream": "摄梦"}[kind]
+            return f"{verb}{target}号" if target else f"不执行{verb}"
+        if kind == "antidote":
+            return "使用解药" if response.get("use_antidote") else "不使用解药"
+        if kind in {"link", "swap"}:
+            return ("连线" if kind == "link" else "交换") + "、".join(f"{s}号" for s in response.get("targets", []))
+        return response.get("speech", "")
+
+    def _ask(self, seat: int, prompt: str, label: str, public: bool = False, response_kind: str = "speech", allowed_targets=None):
         self.current_speaker = seat
+        self.public_speaker = seat if public else None
         self._skip_current = False
         self.manager.set_hard_facts(seat, self._hard_facts_for(seat))
+        if hasattr(self.manager, "set_action_context"):
+            self.manager.set_action_context(seat, self._action_context(seat, response_kind, allowed_targets))
+        if hasattr(self.manager, "set_public_evidence"):
+            self.manager.set_public_evidence(seat, self._public_evidence())
         config.get_logger().info(f"ASK [{label}] 座位{seat}({self.players[seat]['role']}) kind={response_kind}")
         request_id = self.manager.submit_ai_response(seat, prompt, response_kind=response_kind)
         self._active_request_id = request_id
@@ -724,6 +829,8 @@ class GameEngine:
         self._active_request_id = None
         self._skip_current = False
         self._last_resp = resp
+        if resp.get("_is_fallback") and public:
+            resp["speech"] = "【技术性未提交发言】" if resp.get("decision_source") != "manual_skip" else "【人工跳过发言】"
         fatal = resp.get("_fatal_error", "")
         if fatal:
             self.fatal_error = fatal
@@ -732,17 +839,23 @@ class GameEngine:
         if response_kind == "vote":
             vt = resp.get("vote_target", 0)
             display = "（暗投：弃票/空刀）" if not vt else f"（暗投：{vt}号）"
+            if resp.get("_is_fallback"):
+                display = "（暗投：" + self._action_display(response_kind, resp) + "）"
             self._record_reasoning(
                 seat, label, resp.get("reasoning", ""), display,
                 response=resp, request_id=request_id,
             )
         else:
             self._record_reasoning(
-                seat, label, resp.get("reasoning", ""), resp.get("speech", ""),
+                seat, label, resp.get("reasoning", ""), self._action_display(response_kind, resp),
                 response=resp, request_id=request_id,
             )
             if public:
-                self._log_player(seat, resp["speech"])
+                if resp.get("_is_fallback"):
+                    self._broadcast_event(f"【行动状态】{seat}号{resp['speech']}，不能作为其主动沉默或阵营证据。")
+                else:
+                    self._log_player(seat, resp["speech"])
+        self.public_speaker = None
         yield self._ev("done", f"{seat}号行动完毕")
 
     # ========================================================
@@ -755,7 +868,7 @@ class GameEngine:
             return "情侣" if all(s in tp for s in alive) else None
         # 无第三方：标准屠边。按 camp 计狼(白狼王/狼美人 camp=狼人)；神/民按身份计。
         wolves = sum(1 for s in alive if self.roles[s].camp == "狼人")
-        gods = sum(1 for s in alive if self.players[s]["role"] in config.GOD_ROLES)
+        gods = sum(1 for s in alive if self.roles[s].is_god)
         villagers = sum(1 for s in alive if self.players[s]["role"] == "平民")
         if wolves == 0:
             return "好人"
@@ -1014,7 +1127,7 @@ class GameEngine:
         self._log_judge("💘 丘比特睁眼，将连定一对情侣……")
         yield self._ev("cupid", "丘比特连线")
         prompt = cupid.get_link_prompt(self)
-        yield from self._ask(cupid.seat, prompt, "D0 丘比特连线")   # public=False：连线静默进行
+        yield from self._ask(cupid.seat, prompt, "D0 丘比特连线", response_kind="link")   # public=False：连线静默进行
         cupid.parse_link_response(self, self._last_resp)            # 置 self.lovers + 私下告知双方 + 复盘
 
     def _run_wolf_pack_night(self, label):
@@ -1068,6 +1181,7 @@ class GameEngine:
                 self.manager.inject(w, f"【狼队决议】今晚狼队最终对 {wolf_kill}号 出刀。")
             self._log_god(f"🐺 狼队最终目标：{wolf_kill}号")
         # 写入“夜间作战板”，供上帝视角展示狼队分工与决定
+        self.war_board_recipients = list(living_wolves)
         self.war_board = {"day": self.day, "discussion": list(wolf_talk), "kill": wolf_kill, "note": note}
 
     # ========================================================
@@ -1126,7 +1240,7 @@ class GameEngine:
             )
 
         yield from self._ask(sh, prompt, f"D{self.day} 警长定序", public=False, response_kind="order")
-        resp_speech = (self._last_resp.get("speech", "") + " " + self._last_resp.get("reasoning", ""))
+        resp_speech = self._last_resp.get("speech", "")
 
         direction = 1  # 默认顺时针(左)
         if "右" in resp_speech:
@@ -1278,7 +1392,7 @@ class GameEngine:
                   + "只输出严格JSON：{\"reasoning\":\"你的真实考量(上帝视角，不公开)\",\"speech\":\"\",\"badge_target\":X}，"
                   + "X为你要把警徽交给的存活座位号；若当场撕毁则填 0。")
         # public=False：移交是静默动作，绝不把 speech 播到公屏；只在结算后由法官播报【结果】。
-        yield from self._ask(seat, prompt, f"D{self.day} 警徽移交(静默)", public=False)
+        yield from self._ask(seat, prompt, f"D{self.day} 警徽移交(静默)", public=False, response_kind="badge_target")
         target = self._last_resp.get("badge_target", 0)
         if target in self.alive_seats() and target != seat:
             self.badge_history.append({"day": int(self.day), "from": int(seat), "to": int(target)})
@@ -1309,6 +1423,8 @@ class GameEngine:
         self.pending_night_deaths = {}
 
     def _announce_morning(self, deaths, peace_first):
+        for seat in deaths:
+            self.published_alive[seat] = False
         if deaths:
             dead_list = "、".join(f"{s}号" for s in sorted(deaths))
             self._log_judge(f"📢 昨夜倒下的是：{dead_list}。（死因不公布）")
@@ -1357,7 +1473,7 @@ class GameEngine:
         candidates = []
         for s in self.alive_seats():
             # public=False：报名静默进行，不在公屏逐个剧透（阴间仍可见其盘算）
-            yield from self._ask(s, self._police_join_prompt(s), f"D{self.day} 上警报名", public=False)
+            yield from self._ask(s, self._police_join_prompt(s), f"D{self.day} 上警报名", public=False, response_kind="join_police")
             if self._explode_requested(s):
                 yield from self._handle_election_explode(s, entry_resumed)
                 return
@@ -1393,7 +1509,7 @@ class GameEngine:
         self._log_judge("💧 退水环节：上警玩家只决定【退水/不退水/自爆】，不再发言。")
         withdrawers = []
         for s in speak_order:
-            yield from self._ask(s, self._withdraw_prompt(s), f"D{self.day} 退水", public=False)
+            yield from self._ask(s, self._withdraw_prompt(s), f"D{self.day} 退水", public=False, response_kind="withdraw")
             if self._explode_requested(s):
                 yield from self._handle_election_explode(s, entry_resumed)
                 return
@@ -1428,16 +1544,18 @@ class GameEngine:
             return
         self._log_judge(f"🗳️ 警下盲投：{'、'.join(f'{v}号' for v in voters)} 在 {'、'.join(f'{r}号' for r in remaining)} 中选警长。")
         yield self._ev("police_vote", "警下盲投")
-        votes = {}
+        votes, decision_sources = {}, {}
         for v in voters:
-            yield from self._ask(v, self._police_vote_prompt(v, remaining), f"D{self.day} 警下投票", response_kind="vote")
+            yield from self._ask(v, self._police_vote_prompt(v, remaining), f"D{self.day} 警下投票", response_kind="vote", allowed_targets=[0, *remaining])
             vt = self._last_resp.get("vote_target", 0)
             votes[v] = vt if vt in remaining else 0
+            decision_sources[v] = self._decision_source(self._last_resp, vt, {0, *remaining})
         # 竞选阶段尚无警长(全1票)；用“当选警长”而非“被放逐”的措辞
         out, detail, totals = self._weighted_tally(votes, win_word="当选警长", none_word="本轮无人达成多数")
+        detail = self._vote_detail(detail, decision_sources)
         self._log_judge(f"【警长竞选票型】{detail}")
         self._broadcast_event(f"【警长竞选票型】{detail}")
-        self._log_votechart(f"🎖️ 第{self.day}天 · 警长竞选票型", totals, votes, out)   # ★柱状图
+        self._log_votechart(f"🎖️ 第{self.day}天 · 警长竞选票型", totals, votes, out, decision_sources)   # ★柱状图
         self._add_replay(f"- 🗳️ 警长竞选票型：{detail}")
 
         # ★ 平票【绝不随机】，进入 PK 环节
@@ -1484,15 +1602,17 @@ class GameEngine:
         # PK 盲投（警下玩家在平票候选人里二选一）
         self._log_judge(f"🗳️ PK 盲投：{'、'.join(f'{v}号' for v in voters)} 在 {'、'.join(f'{c}号' for c in tied)} 中再选一次。")
         yield self._ev("police_pk_vote", "PK盲投")
-        pk_votes = {}
+        pk_votes, decision_sources = {}, {}
         for v in voters:
-            yield from self._ask(v, self._police_vote_prompt(v, tied), f"D{self.day} PK投票", response_kind="vote")
+            yield from self._ask(v, self._police_vote_prompt(v, tied), f"D{self.day} PK投票", response_kind="vote", allowed_targets=[0, *tied])
             vt = self._last_resp.get("vote_target", 0)
             pk_votes[v] = vt if vt in tied else 0
+            decision_sources[v] = self._decision_source(self._last_resp, vt, {0, *tied})
         out2, detail2, totals2 = self._weighted_tally(pk_votes, win_word="当选警长", none_word="PK仍无人达成多数")
+        detail2 = self._vote_detail(detail2, decision_sources)
         self._log_judge(f"【PK票型】{detail2}")
         self._broadcast_event(f"【PK票型】{detail2}")
-        self._log_votechart(f"⚔️ 第{self.day}天 · 警长PK票型", totals2, pk_votes, out2)   # ★柱状图
+        self._log_votechart(f"⚔️ 第{self.day}天 · 警长PK票型", totals2, pk_votes, out2, decision_sources)   # ★柱状图
         self._add_replay(f"- 🗳️ 警长PK票型：{detail2}")
         if out2 is not None:
             return out2
@@ -1566,7 +1686,11 @@ class GameEngine:
     def _apply_consolidation(self, s):
         """解析归票目标：拦截“归票自己”，合法则播报+广播，返回归票目标(或 None)。"""
         cands = set(self.alive_seats()) - {s}
-        t = parse_seat(self._last_resp["speech"], cands, fallback=False)
+        if "vote_target" in self._last_resp:
+            target = self._last_resp["vote_target"]
+            t = target if target in cands and not self._last_resp.get("_is_fallback") else None
+        else:
+            t = parse_seat(self._last_resp["speech"], cands, fallback=False)
         if t:
             who = "警长" if self.sheriff == s else "末位发言者"
             self._log_judge(f"📌 {who} {s}号 归票：建议大家投 {t}号。")
@@ -1668,7 +1792,7 @@ class GameEngine:
             self._react_cursor += 1
             self._react_left -= 1
             yield from self._ask(w, self._react_explode_prompt(w, today_speeches),
-                                 f"D{self.day} 抢爆判断", public=False)
+                                 f"D{self.day} 抢爆判断", public=False, response_kind="react_explode")
             if self._explode_requested(w):
                 yield from self._handle_regular_explode(w)
                 return True
@@ -1678,7 +1802,7 @@ class GameEngine:
                 and self.players[k]["alive"] and not getattr(self.roles[k], "has_dueled", False)):
             self._react_left -= 1
             yield from self._ask(k, self._react_duel_prompt(k, today_speeches),
-                                 f"D{self.day} 抢决斗判断", public=False)
+                                 f"D{self.day} 抢决斗判断", public=False, response_kind="react_duel")
             if self._duel_requested(k):
                 day_over = yield from self._handle_knight_duel(k)
                 if day_over:
@@ -1706,7 +1830,7 @@ class GameEngine:
             # 无警徽时，末位发言者顺便归票；有警徽则所有人正常发言、由警长最后单独归票
             do_consolidate = (not sheriff_alive) and idx == len(order) - 1 and len(order) >= 2
             if do_consolidate:
-                yield from self._ask(s, self._consolidation_prompt(s, today_speeches, order), f"D{self.day} 归票", public=True)
+                yield from self._ask(s, self._consolidation_prompt(s, today_speeches, order), f"D{self.day} 归票", public=True, response_kind="consolidation")
             else:
                 yield from self._ask(s, self._day_speech_prompt(s, today_speeches, deaths, peace_first, order),
                                      f"D{self.day} 发言", public=True)
@@ -1731,7 +1855,7 @@ class GameEngine:
         if sheriff_alive:
             sh = self.sheriff
             self._log_judge(f"🎖️ 由警长 {sh}号 归票带队。")
-            yield from self._ask(sh, self._consolidation_prompt(sh, today_speeches, order), f"D{self.day} 警长归票", public=True)
+            yield from self._ask(sh, self._consolidation_prompt(sh, today_speeches, order), f"D{self.day} 警长归票", public=True, response_kind="consolidation")
             today_speeches.append((sh, self._last_resp["speech"]))
             if self._explode_requested(sh):
                 yield from self._handle_regular_explode(sh)
@@ -1752,16 +1876,19 @@ class GameEngine:
         self._log_judge("🗳️ 进入【投票阶段】，全体同时暗投（警长票×1.5）。")
         yield self._ev("vote_phase", "投票阶段")
         voters = [s for s in order if self.players[s]["alive"]]
-        votes = {}
+        votes, decision_sources = {}, {}
         for s in voters:
             yield from self._ask(s, self._vote_prompt(s, today_speeches, consolidation_target, order),
                                  f"D{self.day} 暗投", response_kind="vote")
             vt = self._last_resp.get("vote_target", 0)
-            votes[s] = vt if (vt in voters and vt != s) else 0
+            legal = (set(voters) - {s}) | {0}
+            votes[s] = vt if vt in legal else 0
+            decision_sources[s] = self._decision_source(self._last_resp, vt, legal)
         out, detail, totals = self._weighted_tally(votes)
+        detail = self._vote_detail(detail, decision_sources)
         self._log_judge(f"【放逐投票结果】{detail}")
         self._broadcast_event(f"【放逐票型】{detail}")
-        self._log_votechart(f"🗳️ 第{self.day}天 · 放逐投票票型", totals, votes, out)   # ★柱状图
+        self._log_votechart(f"🗳️ 第{self.day}天 · 放逐投票票型", totals, votes, out, decision_sources)   # ★柱状图
         self._add_replay(f"- 🗳️ 放逐票型：{detail}")   # 复盘：完整票型
         if out is not None:
             self._mark_dead(out, "白天公投放逐")
@@ -1898,6 +2025,8 @@ class GameEngine:
 
             # ★★★ _mark_dead_batch 已即时判胜负。若终局，只播报死讯、不进白天(不开枪/不遗言)。
             if self.winner:
+                for seat in deaths:
+                    self.published_alive[seat] = False
                 self.phase = f"第{self.day}天"
                 self._log_judge(f"☀️ 天亮了 —— 第 {self.day} 天")
                 if deaths:
@@ -2121,26 +2250,12 @@ class GameEngine:
         else:
             death_line = "昨夜是平安夜，无人死亡。"
         guidance = (
-            "发言框架：1) 只复盘【已真实发生】的客观事实，严禁编造未发生的夜晚或不存在的技能记录；"
-            "2) 分析发言：谁逻辑矛盾、谁与事实冲突、谁带节奏踩好人；3) 有人跳预言家就对比真假决定是否跟随；"
-            "4) 好人先独立核验证据，再明确投票倾向；只有证据真正收敛时才协同集中，发现错误共识必须及时反水；"
-            "5) 狼人保持此前口径一致。\n"
-            "【鼓励大胆操作】别一味划水！预言家请果断跳身份带队；狼人可悍跳预言家对跳、把水搅浑，"
-            "神民也可视情况站边表态——大胆操作能让对局更精彩。\n"
-            "【保持反思·会纠错】请结合最新信息复盘你之前的判断是否仍然成立：好人完全可能站错队/认错人，"
-            "一旦发现矛盾要及时纠偏、改投正确目标，别认死某人身份一条道走到黑；但也别无端怀疑一切、自乱阵脚。\n"
-            "【机械铁证优先】公开发动猎枪者必是真猎人；若某个预言家曾查杀该猎人，则该预言家身份立即破产。"
-            "警徽移交只代表死警长的选择，不证明接徽者或死警长是好人。发生机制铁证后必须重算全部站边与票型。\n"
-            "【自爆关系规则】狼人自爆只证明自爆者本人是狼，绝不能反向证明其前任警长、支持对象、对跳方或反对者是好人。"
-            "若已确认狼处于警徽传递链上，这条关系必须重新审计，但也不能不经分析自动定狼。\n"
-            "【警告：学会盘票型·防降智】绝不要无脑迷信‘查杀力度大’！悍跳狼往往比真预言家更凶悍。"
-            "若某一轮出现一边倒的【抱团冲票】，这是狼队带节奏的高风险信号，必须结合谁获利、谁组织再判断；"
-            "若有人‘跳神后退水’，可能是在【挡刀】，"
-            "不要盲目把他打成狼。请从【狼人收益】反推身份，别被表演带偏。\n"
-            "【盘玩家关系·找队友】本局【只有狼人夜里能见面串供，好人之间互不相认】。所以要观察‘谁帮谁’："
-            "若某人发言总有人【恰好声援/帮腔/默契抱团对跳或冲票】，这几个抱团的极可能是【狼队友】在互相抬轿；"
-            "反之【孤立无援、没人帮腔却被群起围攻】的，往往是【没有队友的好人】(好人本就各自为战、容易站错队)，"
-            "别因他‘没人撑’就把他当狼。当然仍要结合发言逻辑，别只看声势。"
+            "依据本人合法技能结果、公开机制事实、公开声明、行为假说的顺序判断；声明未必为真。"
+            "引用公开事件或原话，说明一条主要依据和一个可能反例，再表明倾向。"
+            "抱团、孤立、改口和警徽都不能单独定狼；获得新证据可以纠错，也允许合理合作。"
+            "公开发动猎枪者是真猎人，技能事实优先于口头身份；自爆只确认本人。"
+            "技术性未提交不是主动弃权，不得用作躲表态或阵营证据。"
+            "狼人只按伪装身份可知道的信息公开发言；私密刀口不可说成全场已知。"
         )
         audit = ""
         if self.roles[seat].camp != "狼人":
@@ -2162,25 +2277,19 @@ class GameEngine:
         else:
             # 好人合作：先独立依据证据定案，再集中；警长/多数不能覆盖机械铁证或本人底牌。
             camp_hint = (
-                f"【好人投票·先独立定案，再集中】{rec}\n"
-                f"【你的独立审计职责】{self._good_audit_brief(seat)}\n"
-                "0. 先读取Python事实账本。你的真实底牌、机械确认身份和明确的公开声明关系不可被多数意见覆盖。\n"
-                "1. 【机械铁证最高】：公开发动猎枪者=真猎人；成功决斗者=真骑士。若某预言家的查杀与机械身份冲突，"
-                "该预言家立即出局，不得继续跟其警徽或遗留归票。\n"
-                "2. 再判断预言家可信度和查杀；对跳局必须盘警下票型、狼队收益和两边是否有团队抬轿。\n"
-                "3. 警长归票只是建议。只有它不违背前两级证据、且你独立判断也指向同一目标时才跟投。"
-                "【警徽移交不等于身份认证】。\n"
-                "【自爆只确认本人】自爆狼只机械确认其本人为狼，不能反向坐实前任警长、支持对象、对跳方或反对者为好人。"
-                "已确认狼参与的警徽流转是高风险关系线，必须审计双方收益，但也不是自动定狼。\n"
-                "4. 多数人正在投谁，不构成那个人是狼的证据。匿名投票也不能成为‘为自保随大流投已知好人’的借口。"
-                "绝不为了避免自己被抗推而投你依据底牌或铁证认定的好人。\n"
-                "5. 集中票是独立推理收敛后的结果，不是推理起点。证据不足时投你最怀疑的活人，但 reasoning 必须写出"
-                "至少一条可核验依据，禁止只写‘跟警长/避免分票/大家都投他’。"
-                "reasoning 必须明确包含【事实核对】【反方假设】【独立结论】三项，且至少有一条不依赖警长或多数的证据。\n"
-                "【防降智】压倒性票型是强烈风险信号但不是自动定狼；结合谁获利、谁组织冲票、谁在机制铁证后仍拒绝纠错。"
+                f"【好人投票】{rec}\n"
+                "先核对本人技能结果和公开结算事实，再评估公开声明，最后才用行为假说。"
+                "多数票、警徽、抱团、孤立及改口不能单独定阵营；允许有依据的合作与纠错。"
+                "选择最怀疑的合法活人，给出一条可核验依据和一个主要反例，依据不足可主动弃票。"
+                "技术失票、人工跳过不代表玩家躲表态。自爆只确认本人，不认证任何相关人的身份。"
+                "reasoning 用简短依据和结论，不必强制三段长文。"
             )
         return (self._time_anchor()
                 + f"【{self.phase}·投票阶段】现在是投票阶段，不要发言。{sheriff_note}\n"
                 + f"{position}\n当前存活：{self.alive_str()}。\n今天全场发言：\n{spoken}\n"
                 + f"这是匿名同时投票，你看不到别人投给谁。{camp_hint}\n"
                 + "只输出严格JSON：{\"reasoning\":\"判断依据\",\"vote_target\":X}，X为放逐目标座位号，弃票填0。")
+
+
+from runtime_version import register_source as _register_source
+_register_source(__name__, __file__)

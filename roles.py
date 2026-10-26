@@ -39,6 +39,7 @@ def parse_seat(text, candidates, fallback=True):
 
 
 def parse_yes_save(text):
+    text = re.split(r"[。！!；;\n]", str(text).strip(), maxsplit=1)[0]
     if re.search(r"不\s*(救|用|使用|施救)", text):
         return False
     return bool(re.search(r"(救|用解药|使用解药|解药|施救)", text))
@@ -71,10 +72,15 @@ def _combined(resp):
 
 
 def _parse_action_seat(resp, candidates):
-    """★决策以 speech(行动字段)为准：先从 speech 抓座位号；speech 无有效号才退到 speech+reasoning 综合(含随机兜底)。
-    治【左右脑互搏】：reasoning 里满是‘存活3、6、10、12’这类讨论/复盘数字，绝不能盖过 speech 的真实决定。"""
-    t = parse_seat((resp or {}).get("speech", ""), candidates, fallback=False)
-    return t if t is not None else parse_seat(_combined(resp), candidates)
+    """新协议只使用结构目标；兼容旧存档时仅从首句取号，绝不猜推理中的号码。"""
+    resp = resp or {}
+    if resp.get("_is_fallback"):
+        return None
+    if "vote_target" in resp:
+        target = resp["vote_target"]
+        return target if target in candidates else None
+    first = re.split(r"[。！!；;\n]", resp.get("speech", ""), maxsplit=1)[0]
+    return parse_seat(first, candidates, fallback=False)
 
 
 # ============================================================
@@ -84,6 +90,7 @@ class BaseRole:
     role_name = "未知"
     camp = "好人"
     emoji = "❓"
+    is_god = True
 
     def __init__(self, seat):
         self.seat = seat
@@ -135,6 +142,7 @@ class Villager(BaseRole):
     role_name = "平民"
     camp = "好人"
     emoji = "👤"
+    is_god = False
 
     def get_private_memory(self, engine):
         return "你是平民(好人)。没有技能但有一票，靠独立核验发言、事实和票型找狼；确认可信带队者后再协同投票，发现错误共识要及时纠正。"
@@ -150,6 +158,7 @@ class Werewolf(BaseRole):
     role_name = "狼人"
     camp = "狼人"
     emoji = "🐺"
+    is_god = False
 
     def get_private_memory(self, engine):
         mates = [w for w in engine.wolves if w != self.seat]
@@ -215,15 +224,7 @@ class Seer(BaseRole):
         return "你是预言家(神职/好人核心)。每晚可查验一名玩家真实阵营(好人/狼人)，白天可跳预言家报查验结果带队。"
 
     def get_playbook_prompt(self, engine):
-        return ("你属于【好人阵营·预言家(好人核心)】：你掌握查验真相，是好人取胜的关键。\n"
-                "【跳的时机要灵活】：不一定非要第一天硬跳——无人悍跳/信息太少时可适度【压一手】观察(让平民代跳扛刀)；"
-                "但只要有狼【悍跳预言家】跟你对跳，你必须【果断跳出对跳】，报金水/查杀与【警徽流】(指定警徽传递顺序)，"
-                "从【狼人收益、票型走向】猛攻悍跳狼、强硬带队抢回信任，绝不能被悍跳狼盖过。"
-                "只要形成预言家对跳，除非出现能机械确认的更高优先级狼证，你白天必须明确主张放逐悍跳者，"
-                "不能含糊地改推猎人或外置位给悍跳狼喘息空间。"
-                "用逻辑而非情绪取胜，但也别把情绪化的好人误当狼。\n"
-                "📜【每天都报警徽流·留信息】一旦跳了预言家，往后【每一天发言都复述+更新你的警徽流】"
-                "(即‘我若死，警徽先给X、再给Y’)，并复盘累计的金水/查杀——这样即便你今晚被刀，好人也能照你的遗志接力。")
+        return '你是预言家。自己的真实查验是私密硬信息；他人眼中你的公开查验只是声明。出现对跳时说明查验链与可核验矛盾，结合局势选择最有收益的放逐目标；可优先处理查杀狼。跳身份后每日清楚说明累计查验及警徽流，区分实际交徽与未来计划。'
 
     def has_night_action(self, engine):
         return True
@@ -237,12 +238,14 @@ class Seer(BaseRole):
         self._asked = True
         prompt = (f"【{engine.phase}·预言家行动】当前存活：{engine.alive_str()}。"
                   f"请选择今晚查验阵营的对象，speech明确写‘查验X号’。")
-        return (prompt, "speech", f"D{engine.day} 夜晚")
+        return (prompt, "check", f"D{engine.day} 夜晚")
 
     def parse_night_response(self, engine, resp):
         cands = set(engine.alive_seats()) - {self.seat}
         target = _parse_action_seat(resp, cands)   # ★speech 优先，避免 reasoning 噪声号
         # ★V6.4：查验返回【阵营】，按 camp 判定——白狼王(camp=狼人)必须验出"狼人"。
+        if target is None:
+            return
         result = "狼人" if engine.roles[target].camp == "狼人" else "好人"
         self.checks.append((target, result))
         engine.night["seer_check"] = (target, result)
@@ -278,11 +281,7 @@ class Witch(BaseRole):
         return "你是女巫(神职)。1瓶解药(救被刀者,仅第一夜可自救)+1瓶毒药(毒死一人)，每晚最多用一种(双药互斥)。"
 
     def get_playbook_prompt(self, engine):
-        return ("你属于【好人阵营·女巫】：你知道用药信息(谁被刀/你是否救毒)，可用真信息印证真预言家、帮好人锁定狼人。\n"
-                "⚠️【女巫严厉警告·劣势必毒】：绝不要把毒药抱进坟墓！到了第3天或第4天，若局势落后，"
-                "【必须果断盲毒】你心目中的第一嫌疑人，毒错也比被白白刀死强！\n"
-                "⚠️ 如果场上有骑士发动技能存活，或有预言家给出明确查杀，你作为女巫必须与他们打配合！"
-                "绝不能去质疑已经自证技能的神职，务必将毒药用在那些带节奏踩铁好人的狼人身上！")
+        return '你是女巫。依据自己的药路、合法刀口与公开证词决策；别把药路声明当作他人已验证的事实。毒药可用也可保留，比较误毒风险、剩余轮次与被刀风险，不能因为日期靠后就强制盲毒。已结算技能事实优先；预言家口头查杀仍须判断真假。'
 
     def has_night_action(self, engine):
         return self.antidote_available or self.poison_available
@@ -306,7 +305,7 @@ class Witch(BaseRole):
                     selfnote = "（正是你自己，首夜可自救）" if kill == self.seat else ""
                     prompt = (f"【{engine.phase}·女巫-解药】今晚 {kill}号 被狼人刀了{selfnote}。你还有一瓶解药。"
                               f"是否使用解药救他？speech明确写‘救’或‘不救’，reasoning写理由。")
-                    return (prompt, "speech", f"D{engine.day} 夜晚")
+                    return (prompt, "antidote", f"D{engine.day} 夜晚")
         # —— 子步骤②：毒药（本晚未用解药 且 有毒药）——
         if not self._asked_poison:
             self._asked_poison = True
@@ -316,7 +315,7 @@ class Witch(BaseRole):
                         "否则强烈建议【不使用毒药】！" if engine.day == 1 else "")
                 prompt = (f"【{engine.phase}·女巫-毒药】当前存活：{engine.alive_str()}。你还有一瓶毒药"
                           f"（本晚未用解药，可用毒；双药一晚只能用一种）。{warn}是否毒人？speech明确写‘毒X号’或‘不毒’。")
-                return (prompt, "speech", f"D{engine.day} 夜晚")
+                return (prompt, "poison", f"D{engine.day} 夜晚")
         self._pending = None
         return None
 
@@ -324,7 +323,9 @@ class Witch(BaseRole):
         sp = (resp or {}).get("speech", "")
         if self._pending == "antidote":
             kill = engine.night.get("wolf_kill")
-            if parse_yes_save(sp):
+            if (not resp.get("_is_fallback") and self.antidote_available and not self._used_tonight
+                    and kill in engine.alive_seats() and (kill != self.seat or engine.day == 1)
+                    and (resp["use_antidote"] if "use_antidote" in resp else parse_yes_save(sp))):
                 engine.night["witch_save"] = kill
                 self.antidote_available = False
                 self._used_tonight = True
@@ -333,8 +334,9 @@ class Witch(BaseRole):
             else:
                 engine._log_god(f"🧪 女巫（{self.seat}号）放弃使用解药")
         elif self._pending == "poison":
-            target = parse_poison(sp, engine.alive_seats())
-            if target is not None and target != self.seat:
+            target = (_parse_action_seat(resp, set(engine.alive_seats()) - {self.seat})
+                      if "vote_target" in resp else parse_poison(sp, engine.alive_seats()))
+            if target is not None and target != self.seat and self.poison_available and not self._used_tonight and not resp.get("_is_fallback"):
                 engine.night["witch_poison"] = target
                 self.poison_available = False
                 self.medicine_history.append((engine.day, "毒药", target))
@@ -373,11 +375,7 @@ class Hunter(BaseRole):
         return "你是猎人(神职)。被狼刀或被放逐时可开枪带走一人；被女巫毒死时无法开枪。"
 
     def get_playbook_prompt(self, engine):
-        return ("你属于【好人阵营·猎人】：你有枪(被刀/被票可带走一狼)，可适度施压逼狼，保留威慑。\n"
-                "⚠️【猎人严厉警告·别乱开枪】：如果你被刀，除非你有 80% 以上的把握锁定狼人，否则【坚决不要盲目开枪】，"
-                "带走平民或神职将直接导致好人崩盘，宁可不开枪也不要乱带人。\n"
-                "⚠️【猎人开枪守则·抓首恶】：如果你被【公投出局】，请【务必开枪带走那个带头踩你、归票你的人（通常是警长）】，"
-                "不要去带走那些只是盲目跟票的平民！抓首恶！")
+        return '你是猎人。被刀或放逐可开枪，被毒不能开枪。仅依据当时合法信息比较目标狼面和误枪代价，证据不足可以不开枪；带头投你或担任警长不等于狼人，不能为了报复开枪。'
 
     def has_death_action(self, engine, cause):
         return self.can_shoot and cause != "poison"
@@ -388,23 +386,11 @@ class Hunter(BaseRole):
                   + f"当前存活：{engine.alive_str()}。\n"
                   + "⚠️ 警告：绝不可对【已死亡/已出局】的玩家开枪！只能从上面的存活名单里选目标。"
                   + "在speech中明确写出‘开枪X号’，若放弃写‘不开枪’。")
-        return (prompt, "speech", f"D{engine.day} 猎人开枪")
+        return (prompt, "hunt", f"D{engine.day} 猎人开枪")
 
     def parse_death_response(self, engine, resp):
-        self.can_shoot = False   # 不论开不开，这一次临终机会用掉
-        # ★决策以 speech 为准：speech 写明"开枪X号"就以它为准；明确"不开枪"则不开；都没有才综合兜底。
-        sp = (resp or {}).get("speech", "")
-        vt = (resp or {}).get("vote_target", 0)
-        if re.search(r"不\s*开枪|放弃开枪|不开|弃枪", sp):
-            target = None
-        else:
-            m = re.search(r"(开枪|带走|枪杀|射杀|射|崩)[^\d]{0,4}(\d{1,2})", sp)
-            if m and int(m.group(2)) in engine.alive_seats():
-                target = int(m.group(2))
-            elif vt in engine.alive_seats() and vt != self.seat:
-                target = vt
-            else:
-                target = parse_hunter(_combined(resp), engine.alive_seats())
+        self.can_shoot = False
+        target = _parse_action_seat(resp, set(engine.alive_seats()) - {self.seat})
         if target is not None:
             engine._mark_dead(target, "猎人开枪", check=False)
             self.shot = target
@@ -444,11 +430,7 @@ class Guard(BaseRole):
                 "所守之人当晚又被女巫解药救则‘同守同救’会死。")
 
     def get_playbook_prompt(self, engine):
-        return ("你属于【好人阵营·守卫】：你能守护一人，隐藏好身份、关注预言家安危、必要时守关键好人。\n"
-                "⚠️【守卫严厉警告·别无脑守权威】：千万不要无脑去守警长或明跳的预言家！悍跳狼当警长的概率极高，"
-                "且狼队极容易在夜晚跟你打心理战（故意不刀预言家）。请多考虑守护【自己】或【被发金水的好人】。\n"
-                "⚠️【守卫严厉警告·别怠工空守】：你可以空守，但【绝不能连续多晚空守】！在真假预言家难辨时，"
-                "你必须去守护可能被刀的好人（或守自己）。一直空守等于白送好人阵营的轮次！")
+        return '你是守卫。不能连守同一人，可守自己或空守。比较关键好人被刀风险、女巫可能用药导致同守同救的风险与守护收益；警徽或跳预言家本身不认证身份，也不表示一定不能保护。'
 
     def has_night_action(self, engine):
         return True
@@ -466,23 +448,11 @@ class Guard(BaseRole):
                   f"（不能连续两晚守同一人）。请选择今晚守护对象（可守自己），speech明确写‘守护X号’。\n"
                   f"⚠️你也可以选择 vote_target: 0 进行【空守】（谁都不守），以保留实力、或规避‘同守同救’导致目标死亡——"
                   f"若要空守，请在 speech 明确写‘空守’，不要写任何座位号。")
-        return (prompt, "speech", f"D{engine.day} 夜晚")
+        return (prompt, "guard", f"D{engine.day} 夜晚")
 
     def parse_night_response(self, engine, resp):
-        speech = (resp or {}).get("speech", "")
-        cands = set(engine.alive_seats())
-        if self.last_guarded in cands:
-            cands.discard(self.last_guarded)
-        # ★决策以 speech 为准：speech 里有明确守护座位号就守它(治"reasoning 里‘空守风险大不采取’被误判成空守")
-        target = parse_seat(speech, cands, fallback=False)
-        if target is None:
-            void_hit = re.search(r"空守|守空|放弃守护|谁都不守|不守护任何|不守任何人|今晚不守", speech)
-            # 否定语境(“不空守/不采取空守/拒绝空守”)不算空守，避免再被反向误判
-            void_neg = re.search(r"不\s*空守|别\s*空守|非\s*空守|拒绝空守|不\s*(想|要|会|能|打算|采取|考虑|选择)\s*空守", speech)
-            if void_hit and not void_neg:
-                target = None     # speech 明确空守：今夜不守任何人
-            else:
-                target = parse_seat(_combined(resp), cands)   # speech 既无号也未明确空守 → 综合兜底(含随机)
+        cands = set(engine.alive_seats()) - {self.last_guarded}
+        target = _parse_action_seat(resp, cands)
         engine.night["guard_target"] = target
         self.last_guarded = target
         self.guard_history.append((engine.day, target))
@@ -510,6 +480,7 @@ class GraveKeeper(BaseRole):
         super().__init__(seat)
         self._last_seen = None    # 已被告知的最近放逐座位(防重复告知)
         self._asked = False
+        self.results = []
 
     def get_private_memory(self, engine):
         return ("你是守墓人(神职/好人)。每天夜里法官会【私下告诉你】昨天白天被公投放逐出局的那个人是好人还是狼人，"
@@ -534,19 +505,21 @@ class GraveKeeper(BaseRole):
         seat, camp = engine.last_exiled_seat, engine.last_exiled_camp
         prompt = (f"【{engine.phase}·守墓人验墓】法官私下告知你：昨天白天被公投放逐出局的 {seat}号，"
                   f"真实阵营是【{camp}】。请牢记此硬信息用于白天带队。回复 speech:\"已确认\" 即可。")
-        return (prompt, "speech", f"D{engine.day} 守墓")
+        return (prompt, "ack", f"D{engine.day} 守墓")
 
     def parse_night_response(self, engine, resp):
         seat, camp = engine.last_exiled_seat, engine.last_exiled_camp
         self._last_seen = seat
+        self.results.append((engine.day, seat, camp))
         engine.manager.inject(self.seat, f"【守墓结果·硬信息】你已确认：昨天被放逐出局的 {seat}号 真实阵营是【{camp}】。")
         engine._log_god(f"🪦 守墓人（{self.seat}号）获知 {seat}号 真实阵营是【{camp}】")
 
     def skill_state(self):
-        return {"last_seen": self._last_seen}
+        return {"last_seen": self._last_seen, "results": [list(r) for r in self.results]}
 
     def load_skill_state(self, data):
         self._last_seen = (data or {}).get("last_seen")
+        self.results = [tuple(r) for r in (data or {}).get("results", [])]
 
 
 # ============================================================
@@ -566,15 +539,7 @@ class Knight(BaseRole):
                 "若对方是狼，对方当场死亡且白天立即结束入夜；若对方是好人，你以死谢罪、白天继续。")
 
     def get_playbook_prompt(self, engine):
-        base = ("你属于【好人阵营·骑士】：你怀揣一张【决斗】底牌(只能用一次)，是悬在狼头上的利剑。\n"
-                "🐎【决斗指南】当你【高度怀疑某人是狼】或想关键时刻一锤定音时，在发言的 JSON 里加 "
-                "\"is_duel\": true 与 \"duel_target\": X(目标座位号)。规则：对方是狼→对方当场暴毙、白天立即结束入夜(等于帮好人砍一刀)；"
-                "对方是好人→你当场撞死谢罪、白天继续。所以【务必基于扎实逻辑再决斗、切勿赌】；不发动时留着它也能威慑狼隐藏。")
-        # 已决斗成功并存活(决斗到好人会当场撞死，故活着=砍中狼)：升级为强硬带队指令
-        if self.has_dueled:
-            base += ("\n⚠️ 如果你已经决斗成功并存活，你就是全场唯一的【100%铁好人】！此时你必须接管局势，强硬带队。"
-                     "请根据此前的验人信息和票型排坑，严厉打击任何敢于质疑你的倒钩狼，绝不要和好人神职内讧！")
-        return base
+        return '你是骑士，一次性白天决斗：中狼则狼死，中好人则你死。比较立即行动与继续听发言的收益；证据不足可保留技能。游戏未结束、他人获益或警徽流位置都不能单独证明阵营。'
 
     # 决斗在引擎白天发言循环里拦截(_duel_requested/_handle_knight_duel)；骑士无夜间主动行动。
     def skill_state(self):
@@ -624,7 +589,7 @@ class WolfBeauty(Werewolf):
                   f"当前存活：{engine.alive_str()}。不能魅惑你自己({self.seat}号)"
                   + (f"，也不能连魅上次的 {last}号" if last else "")
                   + "。speech 明确写‘魅惑X号’。")
-        return (prompt, "speech", f"D{engine.day} 夜晚")
+        return (prompt, "charm", f"D{engine.day} 夜晚")
 
     def parse_night_response(self, engine, resp):
         cands = set(engine.alive_seats()) - {self.seat}
@@ -673,17 +638,10 @@ class Cupid(BaseRole):
                 f"当前在座：{engine.alive_str()}。speech 明确写出两个座位号(可含你自己)，例如‘情侣：{self.seat}号和7号’ 或 ‘情侣：3号和7号’。")
 
     def parse_link_response(self, engine, resp):
-        nums = []
-        for n in _all_numbers(_combined(resp)):
-            if n in engine.alive_seats() and n not in nums:
-                nums.append(n)
-        alive = engine.alive_seats()
-        while len(nums) < 2:                      # 没报够两个(含可自连) → 随机补齐，防卡死/防非法
-            pool = [s for s in alive if s not in nums]
-            if not pool:
-                break
-            nums.append(random.choice(pool))
-        a, b = nums[0], nums[1]
+        nums = (resp or {}).get("targets", [])
+        if len(nums) != 2 or len(set(nums)) != 2 or any(n not in engine.alive_seats() for n in nums):
+            return
+        a, b = nums
         engine.lovers = (a, b)
         _rule = ("（一方死、另一方立刻殉情同死。⚠️若你俩恰是【一好一狼】，则你俩连同丘比特将组成【情侣第三方】，"
                  "要活到最后、清掉所有非情侣方才算情侣胜——请尽快从发言判断对方阵营，同阵营则互保、跨阵营则联手清场。）")
@@ -742,7 +700,7 @@ class Dreamer(BaseRole):
                   f"请选择今晚摄梦成为梦游者的对象(不能选你自己{self.seat}号"
                   + (f"，若继续选上次的 {last}号 ta 将在明早暴毙" if last else "")
                   + ")。speech 明确写‘摄梦X号’。")
-        return (prompt, "speech", f"D{engine.day} 夜晚")
+        return (prompt, "dream", f"D{engine.day} 夜晚")
 
     def parse_night_response(self, engine, resp):
         cands = set(engine.alive_seats()) - {self.seat}
@@ -830,14 +788,12 @@ class Magician(BaseRole):
         self._asked = True
         prompt = (f"【{engine.phase}·魔术师行动】当前存活：{engine.alive_str()}。"
                   f"请选择今晚交换号码牌的两位玩家(例如‘交换3号和8号’)。所有人的夜间技能将移位。")
-        return (prompt, "speech", f"D{engine.day} 夜晚")
+        return (prompt, "swap", f"D{engine.day} 夜晚")
 
     def parse_night_response(self, engine, resp):
-        nums = []
-        alive = engine.alive_seats()
-        for n in _all_numbers(_combined(resp)):
-            if n in alive and n not in nums:
-                nums.append(n)
+        nums = (resp or {}).get("targets", [])
+        if len(nums) != 2 or len(set(nums)) != 2 or any(n not in engine.alive_seats() for n in nums):
+            return
         if len(nums) >= 2:
             a, b = nums[0], nums[1]
             self.current_swap = (a, b)
@@ -864,4 +820,29 @@ ROLE_CLASSES = {
 
 
 def create_role(role_name, seat):
-    return ROLE_CLASSES.get(role_name, Villager)(seat)
+    if role_name not in ROLE_CLASSES:
+        raise ValueError(f"未知角色：{role_name}")
+    return ROLE_CLASSES[role_name](seat)
+
+
+def validate_board_roles(board_roles):
+    """在发牌或清空记忆之前拒绝未知角色及无法进行屠边的板子。"""
+    names = list(board_roles)
+    if len(names) != 12:
+        raise ValueError("游戏板子必须恰好包含 12 个角色")
+    unknown = sorted(set(names) - ROLE_CLASSES.keys())
+    if unknown:
+        raise ValueError("游戏板子含未知角色：" + "、".join(unknown))
+    classes = [ROLE_CLASSES[name] for name in names]
+    if not any(cls.camp == "狼人" for cls in classes):
+        raise ValueError("游戏板子必须包含狼人")
+    if "平民" not in names or not any(cls.is_god for cls in classes):
+        raise ValueError("屠边板子必须同时包含神职和平民")
+    for name in set(names):
+        if ROLE_CLASSES[name].is_god and names.count(name) > 1:
+            raise ValueError(f"当前规则不支持重复神职：{name}")
+    return names
+
+
+from runtime_version import register_source as _register_source
+_register_source(__name__, __file__)

@@ -1,6 +1,38 @@
-[client]
-showErrorDetails = true
-toolbarMode = "viewer"
+[runner]
+fastReruns = false
 
-[logger]
-level = "info"
+[global]
+# 长局会发生数百次 rerun。把消息哈希保留更久，降低慢速浏览器标签页请求到
+# 已被服务端淘汰的 ForwardMsg（Cached ForwardMsg MISS）的概率。
+maxCachedMessageAge = 50
+
+[theme]
+font = "sans serif"
+
+[theme.light]
+primaryColor = "#79521c"
+backgroundColor = "#f2f5f9"
+secondaryBackgroundColor = "#e8eef6"
+textColor = "#1c293b"
+borderColor = "#b7c4d4"
+
+[theme.light.sidebar]
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#e8eef6"
+textColor = "#1c293b"
+
+[theme.dark]
+primaryColor = "#e4c38d"
+backgroundColor = "#0d1420"
+secondaryBackgroundColor = "#1c293b"
+textColor = "#edf2f8"
+borderColor = "#42536a"
+
+[theme.dark.sidebar]
+backgroundColor = "#151e2b"
+secondaryBackgroundColor = "#1c293b"
+textColor = "#edf2f8"
+
+[server]
+address = "127.0.0.1"
+port = 8503

@@ -1,0 +1,319 @@
+"""真实 Streamlit 控件与后台服务的连接，不调用网络或付费模型。"""
+import json
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from streamlit.testing.v1 import AppTest
+
+from ai_agent import AgentManager
+from game_engine import GameEngine
+
+
+APP = Path(__file__).resolve().parents[1] / "app.py"
+
+
+class AppIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.saves = Path(folder.name) / "saves"
+        self.replays = Path(folder.name) / "replays"
+        self.saves.mkdir()
+        self.replays.mkdir()
+        storage = patch("session_storage.storage_paths", return_value=(str(self.saves), str(self.replays)))
+        storage.start()
+        self.addCleanup(storage.stop)
+        # 防止未来修改让测试意外访问真实模型服务。
+        network = patch.object(AgentManager, "_execute_response", side_effect=AssertionError("测试禁止模型请求"))
+        network.start()
+        self.addCleanup(network.stop)
+        self.app = AppTest.from_file(str(APP), default_timeout=10).run()
+        self.addCleanup(self.close_service)
+        self.assert_clean()
+
+    def close_service(self):
+        service = self.app.session_state["game_service"]
+        if service is not None:
+            service.close("test_cleanup")
+
+    def assert_clean(self):
+        self.assertFalse(self.app.exception, [e.message for e in self.app.exception])
+
+    def click(self, label):
+        next(b for b in self.app.button if b.label == label).click().run()
+        self.assert_clean()
+
+    def start_manual(self):
+        self.app.checkbox[0].uncheck().run()
+        self.app.text_input[0].set_value("test-key-never-sent").run()
+        self.click("🎬 开始新游戏")
+
+    def test_manual_save_load_resume_and_reset(self):
+        self.start_manual()
+        self.click("⏭️ 单步")
+        self.assertEqual(self.app.session_state["last_event_type"], "start")
+        self.click("⏸️ 暂停")
+        self.click("💾 保存当前进度")
+        saved = list(self.saves.glob("*.json"))
+        self.assertEqual(len(saved), 1)
+        self.assertNotIn("test-key-never-sent", saved[0].read_text(encoding="utf-8"))
+        old_service = self.app.session_state["game_service"]
+        self.click("📂 读取存档")
+        self.assertFalse(old_service.step())
+        self.assertFalse(self.app.session_state["running"])
+        self.assertIn("第1夜", self.app.session_state["status"])
+        self.click("⏭️ 单步")
+        self.assertEqual(self.app.session_state["last_event_type"], "resume")
+        self.click("🔄 重置")
+        self.assertIsNone(self.app.session_state["engine"])
+        self.assertIsNone(self.app.session_state["game_service"])
+
+    def test_automatic_completion_renders_terminal_archive_and_metrics(self):
+        def short_game(engine):
+            engine.phase = "第1夜"
+            engine.day = 1
+            yield engine._ev("night", "测试夜晚")
+            engine.winner = "好人"
+            engine.phase = "游戏结束"
+            yield engine._ev("end", "游戏结束")
+
+        self.app.text_input[0].set_value("test-key-never-sent").run()
+        with patch.object(GameEngine, "run", short_game):
+            self.click("🎬 开始新游戏")
+        # 完整页面现在正常返回，测试需像浏览器的下一次定时刷新一样收集终局快照。
+        deadline = time.monotonic() + 4
+        while not self.app.session_state["game_service"].snapshot().done:
+            self.assertLess(time.monotonic(), deadline)
+            threading.Event().wait(.01)
+        self.app.run()
+        self.assert_clean()
+        self.assertTrue(self.app.session_state["done"])
+        self.assertFalse(self.app.session_state["running"])
+        archive = self.app.session_state["last_archive"]
+        self.assertTrue(Path(archive["json"]).exists())
+        metric = next(m for m in self.app.metric if m.label == "好人投狼比例")
+        self.assertEqual(metric.value, "N/A")
+
+    def test_paused_player_can_be_skipped_from_ui(self):
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+
+        def waiting_response(*_args):
+            gate.wait(3)
+            return {"reasoning": "迟到结果", "speech": "过。", "vote_target": 0}
+
+        with patch.object(AgentManager, "_execute_response", side_effect=waiting_response):
+            self.start_manual()
+            for _ in range(5):
+                self.click("⏭️ 单步")
+                if self.app.session_state["engine"].has_pending_action():
+                    break
+            self.assertTrue(self.app.session_state["engine"].has_pending_action())
+            self.click("⏸️ 暂停")
+            self.click("⏭️ 跳过当前玩家")
+            self.assertFalse(self.app.session_state["engine"].has_pending_action())
+            self.assertFalse(self.app.session_state["running"])
+            self.assertEqual(self.app.session_state["last_event_type"], "done")
+        gate.set()
+
+    def test_invalid_load_preserves_the_current_service(self):
+        self.start_manual()
+        self.click("⏸️ 暂停")
+        service = self.app.session_state["game_service"]
+        (self.saves / "invalid.json").write_text(json.dumps(["invalid"]), encoding="utf-8")
+        self.app.run()
+        self.click("📂 读取存档")
+        self.assertIs(self.app.session_state["game_service"], service)
+        self.assertTrue(any("读档失败" in e.value for e in self.app.error))
+        self.assertTrue(service.step())
+
+    def test_preview_is_isolated_and_does_not_create_a_model_client(self):
+        with patch.object(AgentManager, "__init__", side_effect=AssertionError("示例禁止创建模型客户端")):
+            self.click("查看示例 · 零 API")
+            self.assertTrue(self.app.session_state["preview_mode"])
+            self.assertIsNone(self.app.session_state["engine"])
+            self.assertIsNone(self.app.session_state["game_service"])
+            self.assertFalse(list(self.replays.iterdir()))
+            self.click("退出示例")
+            self.assertFalse(self.app.session_state["preview_mode"])
+
+    def test_preview_feed_filters_by_player_and_judge(self):
+        self.click("查看示例 · 零 API")
+        self.app.radio(key="feed_channel").set_value("玩家发言").run()
+        self.assert_clean()
+        rows = [m.value for m in self.app.markdown if '<article class="wv-event' in m.value]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("03 号玩家", rows[0])
+        self.assertNotIn("法官播报", rows[0])
+        self.app.radio(key="feed_channel").set_value("法官播报").run()
+        rows = [m.value for m in self.app.markdown if '<article class="wv-event' in m.value]
+        self.assertIn("法官播报", rows[0])
+        self.assertNotIn("03 号玩家", rows[0])
+
+    def test_feed_controls_preserve_game_and_top_exits_follow_mode(self):
+        self.click("查看示例 · 零 API")
+        self.assertTrue(self.app.toggle(key="feed_follow_latest").value)
+        self.click("⬆️ 顶部")
+        self.assertFalse(self.app.toggle(key="feed_follow_latest").value)
+        self.assertIsNone(self.app.session_state.filtered_state.get("_feed_scroll_action"))
+        self.click("⬇️ 沉底一次")
+        self.assertFalse(self.app.toggle(key="feed_follow_latest").value)
+        self.assertIsNone(self.app.session_state.filtered_state.get("_feed_scroll_action"))
+        self.app.toggle(key="feed_follow_latest").set_value(True).run()
+        self.app.toggle(key="feed_follow_latest").set_value(False).run()
+        self.assertIsNone(self.app.session_state.filtered_state.get("_feed_scroll_action"))
+        self.assert_clean()
+        self.assertIsNone(self.app.session_state["game_service"])
+
+    def test_old_150_row_terminal_does_not_survive_new_64_row_game(self):
+        from game_service import GameService
+        import config
+
+        def make_engine(count, old=False):
+            manager = AgentManager(api_key="offline", base_url="https://example.invalid")
+            self.addCleanup(manager.shutdown)
+            engine = GameEngine(manager)
+            engine.setup(config.GAME_BOARDS[config.DEFAULT_BOARD])
+            engine.public_log = []
+            for i in range(count - int(old)):
+                engine._log_judge(f"{'OLD' if old else 'NEW'}动态{i}")
+            if old:
+                engine.winner, engine.phase = "狼人", "游戏结束"
+                engine._log_win("OLD终局 狼人获胜")
+            else:
+                engine.day, engine.phase, engine.current_speaker = 2, "第2天", 6
+            return engine
+
+        old = GameService(make_engine(150, True), str(self.replays), automatic=False)
+        self.addCleanup(old.close)
+        self.app.session_state["game_service"] = old
+        self.app.run()
+        self.assert_clean()
+        self.assertIn("OLD终局", "\n".join(m.value for m in self.app.markdown))
+        current = GameService(make_engine(64), str(self.replays), automatic=False)
+        self.addCleanup(current.close)
+        self.app.session_state["game_service"] = current
+        self.app.run()
+        self.assert_clean()
+        rendered = "\n".join(m.value for m in self.app.markdown)
+        self.assertNotIn("OLD", rendered)
+        self.assertNotIn("狼人获胜", rendered)
+        self.assertIn("NEW动态63", rendered)
+        self.assertIn("06 号的回合", rendered)
+        self.assertFalse(any("仅展示最近" in c.value for c in self.app.caption))
+
+    def test_single_view_hides_other_players_and_full_knowledge_exports(self):
+        self.click("查看示例 · 零 API")
+        self.app.selectbox(key="viewer_seat").set_value(7)
+        self.app.radio(key="viewer_mode").set_value("单一视角").run()
+        self.assert_clean()
+        options=self.app.selectbox(key="sel_seat").options
+        self.assertEqual(options,["07 号 · 平民"])
+        rendered="\n".join(m.value for m in self.app.markdown)
+        self.assertIn('aria-label="1号 未知 存活"',rendered)
+        self.assertNotIn("秘密行动 · 全知可见",rendered)
+        self.assertNotIn('aria-label="狼人"',rendered)
+        self.assertIn("存活未知",rendered)
+        self.app.checkbox(key="reveal_factions").check().run()
+        self.assert_clean()
+        rendered="\n".join(m.value for m in self.app.markdown)
+        self.assertIn('aria-label="狼人" aria-valuenow="4"',rendered)
+
+    def test_native_appearance_entry_and_perspective_preserve_a_live_game(self):
+        self.start_manual()
+        self.click("⏸️ 暂停")
+        service=self.app.session_state["game_service"]
+        game_id=service.snapshot().engine.game_id
+        self.assertFalse(any(box.key == "ui_theme" for box in self.app.selectbox))
+        self.assertTrue(any("右上角" in caption.value and "跟随系统" in caption.value for caption in self.app.caption))
+        for _ in range(2):
+            self.app.run()
+            self.assert_clean()
+            self.assertIs(self.app.session_state["game_service"],service)
+            self.assertEqual(service.snapshot().engine.game_id,game_id)
+        self.app.radio(key="viewer_mode").set_value("单一视角").run()
+        self.assert_clean()
+        self.assertFalse(any(b.label=="📥 导出本局复盘 (MD格式)" for b in self.app.get("download_button")))
+        self.assertFalse(any(b.label=="⚡ 发送法旨" for b in self.app.button))
+        self.app.radio(key="viewer_mode").set_value("全知视角").run()
+        self.assert_clean()
+        self.assertIs(self.app.session_state["game_service"],service)
+
+    def test_apply_settings_preserves_paused_game_memory_usage_and_failure_count(self):
+        self.start_manual()
+        self.click("⏸️ 暂停")
+        service = self.app.session_state["game_service"]
+        previous = service._engine.manager
+        previous._accumulate_usage({"total_tokens": 123}, "speech")
+        previous._consecutive_failures = 2
+        previous.agent_memory[1]["summary"] = "保留我的判断"
+        game_id = service.snapshot().engine.game_id
+        self.app.run()
+        self.click("应用模型设置（保持暂停）")
+        current = service._engine.manager
+        self.assertIsNot(current, previous)
+        self.assertEqual(current.agent_memory[1]["summary"], "保留我的判断")
+        self.assertEqual(current.get_usage_snapshot()["total_tokens"], 123)
+        self.assertEqual(current.get_health_snapshot()["consecutive_failures"], 2)
+        self.assertEqual(service.snapshot().engine.game_id, game_id)
+        self.assertFalse(service.snapshot().running)
+
+    def test_existing_service_uses_current_snapshot_protocol_after_hot_update(self):
+        self.start_manual()
+        self.click("⏸️ 暂停")
+        service = self.app.session_state["game_service"]
+        original_snapshot = service.snapshot
+
+        class LegacyUsage:
+            def get_usage_snapshot(self):
+                return service._engine.manager.get_usage_snapshot()
+
+            def has_pending(self):
+                return False
+
+        def legacy_snapshot():
+            snapshot = original_snapshot()
+            snapshot.engine.manager = LegacyUsage()
+            return snapshot
+
+        with patch.object(service, "snapshot", side_effect=legacy_snapshot):
+            self.app.run()
+            self.assert_clean()
+            self.assertTrue(any(e.label == "API 诊断与恢复" for e in self.app.expander))
+
+    def test_sharing_opt_in_and_observer_route_never_loads_owner_controls(self):
+        from room_registry import get_registry
+        self.app.checkbox(key="enable_sharing").check().run()
+        self.start_manual()
+        room, owner = self.app.session_state["room_receipt"]
+        service = self.app.session_state["game_service"]
+        self.assertIsNotNone(service.display_replay)
+        grant, secret = get_registry().issue(room, owner, "public")
+        observer = AppTest.from_file(str(APP), default_timeout=10)
+        observer.query_params["room"] = room
+        with patch.object(AgentManager, "__init__", side_effect=AssertionError("observer created client")):
+            observer.run()
+            self.assertFalse(observer.exception)
+            self.assertEqual(len(observer.text_input), 1)
+            observer.text_input[0].set_value(secret)
+            next(b for b in observer.button if b.label == "加入观战").click().run()
+            self.assertFalse(observer.exception)
+            self.assertFalse(any(b.label in {"🎬 开始新游戏", "⏸️ 暂停", "应用模型设置（保持暂停）"} for b in observer.button))
+            self.assertNotIn("game_service", observer.session_state.filtered_state)
+            self.assertNotIn("engine", observer.session_state.filtered_state)
+            self.assertTrue(any("未知" in m.value for m in observer.markdown))
+            get_registry().revoke(room, owner, grant)
+            observer.run()
+            self.assertFalse(observer.exception)
+            self.assertTrue(any("权限已失效" in e.value for e in observer.error))
+            self.assertFalse(any('<div class="wv-matrix"' in m.value for m in observer.markdown))
+        service.close()
+        get_registry().release(room, owner)
+
+
+if __name__ == "__main__":
+    unittest.main()

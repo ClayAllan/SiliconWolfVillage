@@ -1,0 +1,333 @@
+"""进程内对局服务：独立推进生成器，界面只读取快照和提交控制命令。
+
+不依赖 Streamlit，也不继承其会话上下文。服务进程退出后不自动恢复执行。
+"""
+from __future__ import annotations
+
+import copy
+import json
+import threading
+import time
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+
+import config
+from game_archive import archive_game
+from ui_runtime import rerun_delay
+
+
+class _UsageSnapshot:
+    def __init__(self, manager):
+        self._usage = manager.get_usage_snapshot() if hasattr(manager, "get_usage_snapshot") else {}
+        self._pending = bool(manager.has_pending())
+        self._health = manager.get_health_snapshot() if hasattr(manager, "get_health_snapshot") else {}
+
+    def get_usage_snapshot(self):
+        return copy.deepcopy(self._usage)
+
+    def has_pending(self):
+        return self._pending
+
+    def get_health_snapshot(self):
+        return copy.deepcopy(self._health)
+
+
+@dataclass(frozen=True)
+class GameSnapshot:
+    engine: object
+    running: bool
+    done: bool
+    status: str
+    error: str
+    last_event_type: str
+    waiting_since: float
+    last_archive: dict | None
+    archive_error: str
+
+
+class GameService:
+    """同一对局的 next(gen)、控制、存档及快照共用一把锁。"""
+
+    def __init__(self, engine, replay_directory, *, automatic=True, delay=0.6, turbo=False,
+                 generator=None, record_display=False):
+        self._engine = engine
+        self._generator = None if engine.winner else (generator if generator is not None else engine.run())
+        self._replay_directory = replay_directory
+        self._condition = threading.Condition(threading.RLock())
+        self._worker = None
+        self._closed = False
+        self._running = False
+        self._done = bool(engine.winner)
+        self._automatic = bool(automatic)
+        self._delay = max(0.0, float(delay))
+        self._turbo = bool(turbo)
+        self._next_due = 0.0
+        self._status = (f"游戏结束：{engine.winner}" if engine.winner else
+                        f"已读档，将从第{engine.day + 1}夜继续" if getattr(engine, "_resume", False)
+                        else "等待推进")
+        self._error = ""
+        self._last_event_type = ""
+        self._waiting_since = 0.0
+        self._last_archive = None
+        self._archive_error = ""
+        self.revision = 0
+        self.display_replay = None
+        if record_display:
+            from replay_frames import DisplayReplay
+            directory = engine.recorder.directory if engine.recorder else Path(replay_directory) / engine.game_id
+            self.display_replay = DisplayReplay(engine.game_id, directory)
+            self.display_replay.capture(engine)
+
+    def configure(self, *, automatic, delay, turbo=False, react_budget=None):
+        with self._condition:
+            self._automatic = bool(automatic)
+            self._delay = max(0.0, float(delay))
+            self._turbo = bool(turbo)
+            if react_budget is not None:
+                self._engine.react_budget = max(0, int(react_budget))
+            self._ensure_worker_locked()
+            self._condition.notify_all()
+
+    def play(self):
+        with self._condition:
+            if self._closed or self._done:
+                return
+            if not self._publish_display():
+                return
+            self._error = ""
+            self.revision += 1
+            self._running = True
+            self._next_due = 0.0
+            self._ensure_worker_locked()
+            self._condition.notify_all()
+
+    def pause(self):
+        with self._condition:
+            self.revision += 1
+            self._running = False
+            self._condition.notify_all()
+
+    def retry_display_recording(self):
+        """Retry committed display output even after game end, without advancing actions."""
+        with self._condition:
+            if self._closed:
+                raise RuntimeError("对局服务已关闭")
+            result = self._publish_display()
+            if result:
+                self._error = ""
+            self.revision += 1
+            return result
+
+    def apply_model_settings(self, **settings):
+        """只在干净暂停边界更换客户端，不推进生成器、不发网络请求。"""
+        from ai_agent import AgentManager
+
+        with self._condition:
+            if self._closed or self._done:
+                raise RuntimeError("当前对局已结束")
+            if self._running or self._engine.manager.has_pending():
+                raise RuntimeError("请先暂停并等待后台请求完成；有待收集行动时先单步收集或跳过")
+            previous = self._engine.manager
+            candidate = AgentManager(**settings)
+            try:
+                candidate.load_state(copy.deepcopy(previous.export_state()))
+                candidate.set_recorder(self._engine.recorder, self._engine._recording_context)
+            except Exception:
+                candidate.shutdown()
+                raise
+            self._engine.manager = candidate
+            previous.shutdown()
+            candidate._record_api(record_type="settings_applied", status="paused",
+                                   provider=candidate.provider, thinking=candidate.thinking,
+                                   reasoning_effort=candidate.reasoning_effort,
+                                   good_model=candidate.good_model, wolf_model=candidate.wolf_model)
+            return candidate.get_health_snapshot()
+
+    def diagnose_connection(self):
+        with self._condition:
+            if self._closed or self._running or self._engine.manager.has_pending():
+                raise RuntimeError("请先暂停并等待后台请求完成")
+            return self._engine.manager.diagnose_connection()
+
+    def step(self):
+        with self._condition:
+            if self._closed or self._done:
+                return False
+            if self._running and self._automatic:
+                raise RuntimeError("请先暂停自动推演再单步")
+            return self._advance_locked()
+
+    def request_skip_current(self):
+        with self._condition:
+            if self._closed or self._done or not self._engine.request_skip_current():
+                return False
+            self._next_due = 0.0
+            # 暂停时也立即收集取消结果，不等待网页或下一次“继续”。
+            if not (self._running and self._automatic):
+                self._advance_locked()
+            self._condition.notify_all()
+            return True
+
+    def inject(self, seat, text):
+        with self._condition:
+            if self._closed or self._done:
+                raise RuntimeError("对局已结束，无法传音")
+            if seat not in self._engine.players:
+                raise ValueError("无效的玩家座位")
+            self._engine.manager.inject(seat, text)
+
+    def snapshot(self):
+        with self._condition:
+            # 复制纯业务状态，排除客户端、Future、线程锁和取证器。
+            # 多个界面可各自持有一份快照，渲染不与后台修改共享 list/dict。
+            view = copy.copy(self._engine)
+            for key, value in vars(self._engine).items():
+                if key not in {"manager", "recorder"}:
+                    setattr(view, key, copy.deepcopy(value))
+            view.manager = _UsageSnapshot(self._engine.manager)
+            view.recorder = None
+            return GameSnapshot(
+                engine=view, running=self._running, done=self._done, status=self._status,
+                error=self._error, last_event_type=self._last_event_type,
+                waiting_since=self._waiting_since,
+                last_archive=copy.deepcopy(self._last_archive), archive_error=self._archive_error,
+            )
+
+    def save(self, directory):
+        with self._condition:
+            if self._closed:
+                raise RuntimeError("对局已关闭")
+            if (self._running and self._automatic) or self._engine.manager.has_pending():
+                raise RuntimeError("请先暂停并等待后台任务完成后再存档")
+            target_dir = Path(directory)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            name = f"save_D{self._engine.day}_{stamp}_{uuid.uuid4().hex[:8]}.json"
+            target = target_dir / name
+            payload = {
+                "version": "v6", "saved_at": stamp,
+                "meta": {"day": self._engine.day, "phase": self._engine.phase,
+                         "winner": self._engine.winner, "alive": len(self._engine.alive_seats())},
+                "engine": self._engine.export_state(),
+                "manager": self._engine.manager.export_state(),
+            }
+            temporary = target.with_suffix(".json.tmp")
+            try:
+                temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                temporary.replace(target)
+            finally:
+                temporary.unlink(missing_ok=True)
+            return name
+
+    def archive(self, reason="manual_archive"):
+        with self._condition:
+            self._archive_locked(reason)
+
+    def close(self, reason="manual_reset"):
+        with self._condition:
+            if self._closed:
+                return
+            self._closed = True
+            self._running = False
+            self._engine.manager.cancel_all_pending(reason)
+            if self._generator is not None:
+                self._generator.close()
+                self._generator = None
+            self._archive_locked(reason)
+            if hasattr(self._engine.manager, "shutdown"):
+                self._engine.manager.shutdown()
+            self._condition.notify_all()
+
+    def _ensure_worker_locked(self):
+        if (not self._closed and not self._done and self._running and self._automatic
+                and self._worker is None):
+            self._worker = threading.Thread(
+                target=self._run, name=f"wolf-game-{self._engine.game_id}", daemon=True,
+            )
+            self._worker.start()
+
+    def _run(self):
+        try:
+            while True:
+                with self._condition:
+                    if self._closed or self._done or not self._running or not self._automatic:
+                        self._worker = None
+                        return
+                    remaining = self._next_due - time.monotonic()
+                    if remaining > 0:
+                        self._condition.wait(timeout=remaining)
+                        continue
+                    self._advance_locked()
+                    self._next_due = time.monotonic() + rerun_delay(
+                        self._last_event_type, self._delay, self._turbo,
+                    )
+        finally:
+            with self._condition:
+                # 异常退出也释放线程占位；运行状态由推进错误分支处理。
+                if self._worker is threading.current_thread():
+                    self._worker = None
+
+    def _publish_display(self):
+        if self.display_replay is None:
+            return True
+        try:
+            self.display_replay.capture(self._engine)
+            return True
+        except Exception:
+            self.display_replay.issue = "展示记录写入中断；已暂停，保留已结算动作。"
+            self._running = False
+            self._error = self.display_replay.issue
+            return False
+
+    def _advance_locked(self):
+        if self.display_replay is not None and self.display_replay.issue:
+            if not self._publish_display():
+                return False
+        try:
+            event = next(self._generator)
+            self.revision += 1
+            self._last_event_type = event.get("type", "")
+            self._status = event.get("status", "")
+            if self._last_event_type in {"turn", "compress"}:
+                self._waiting_since = time.time()
+            elif self._last_event_type not in {"waiting", "compress_waiting"}:
+                self._waiting_since = 0.0
+            if self._last_event_type not in {"waiting", "compress_waiting"}:
+                config.get_logger().info(f"STEP✓ {self._last_event_type} '{self._status}'")
+            fatal = getattr(self._engine, "fatal_error", "")
+            if fatal:
+                self._engine.fatal_error = ""
+                self._running = False
+                self._error = f"API已暂停: {fatal}"
+                self._status = "API 已暂停（查看诊断，应用设置后继续下一步）"
+            if self._last_event_type not in {"waiting", "compress_waiting"}:
+                self._publish_display()
+            if self._last_event_type == "end":
+                self._done = True
+                self._running = False
+                self._archive_locked("game_end")
+            return True
+        except StopIteration:
+            self._done = True
+            self._running = False
+            self._status = "游戏结束"
+            self._last_event_type = "game_over"
+            self._archive_locked("stop_iteration")
+            return True
+        except Exception as error:
+            self._running = False
+            self._done = True
+            self._error = f"引擎崩溃: {type(error).__name__}: {error}"
+            self._status = "引擎崩溃"
+            config.get_logger().exception(self._error)
+            self._archive_locked("engine_error")
+            return False
+
+    def _archive_locked(self, reason):
+        try:
+            self._last_archive = archive_game(self._engine, self._replay_directory, reason=reason)
+            self._archive_error = ""
+        except Exception as error:
+            self._archive_error = f"自动归档失败: {type(error).__name__}: {error}"
+            config.get_logger().exception(self._archive_error)

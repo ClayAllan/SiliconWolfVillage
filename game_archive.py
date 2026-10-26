@@ -29,6 +29,7 @@ INDEX_COLUMNS = [
     "reasoning_tokens", "unmetered_returns", "summary_requests", "summary_total_tokens",
     "exile_rounds", "exiled_wolves",
     "wolf_explosions", "good_vote_accuracy", "good_vote_cohesion", "archive_path",
+    "api_attempt_count", "retried_actions", "good_active_abstention_rate", "good_technical_misses",
 ]
 
 
@@ -48,7 +49,8 @@ def _role_camp(engine, seat: int, role_name: str = "") -> str:
     role = (getattr(engine, "roles", {}) or {}).get(seat)
     if role is not None and getattr(role, "camp", None):
         return role.camp
-    return "狼人" if role_name in {"狼人", "白狼王", "狼美人"} else "好人"
+    role_class = config.ROLE_CLASSES.get(role_name)
+    return role_class.camp if role_class is not None else "好人"
 
 
 def _pct(value) -> str:
@@ -117,6 +119,7 @@ def _metrics(engine) -> dict:
                 "votes": item.get("votes", {}),
                 "winner": item.get("winner"),
                 "sheriff": item.get("sheriff"),
+                "decision_sources": _vote_sources(engine, item),
             })
     players = getattr(engine, "players", {}) or {}
     alive = sorted(int(s) for s, p in players.items() if p.get("alive"))
@@ -129,8 +132,23 @@ def _metrics(engine) -> dict:
     }
 
 
+def _vote_sources(engine, item):
+    sources = {str(k): v for k, v in (item.get("decision_sources") or {}).items()}
+    # 兼容旧归档：按日和座位关联真实行动，绝不把所有0票推断为主动弃票。
+    day = re.search(r"第(\d+)天", str(item.get("title", "")))
+    if day and "放逐" in str(item.get("title", "")):
+        for seat, rows in (getattr(engine, "reasoning_log", {}) or {}).items():
+            row = next((r for r in reversed(rows) if r.get("label") == f"D{day[1]} 暗投"), None)
+            if row and str(seat) not in sources:
+                response = row.get("response") or {}
+                sources[str(seat)] = response.get("decision_source") or (
+                    "technical_fallback" if response.get("_is_fallback") else "model")
+    return sources
+
+
 def _strategic_analysis(engine, metrics: dict, roles: dict) -> dict:
     good_valid = good_wolf_hits = good_abstain = good_same_target = 0
+    active_abstain = technical_misses = manual_skips = invalid_targets = unknown_abstain = 0
     wolf_valid = wolf_good_hits = 0
     exile_rounds = []
     exiled_wolves = exiled_goods = 0
@@ -155,6 +173,12 @@ def _strategic_analysis(engine, metrics: dict, roles: dict) -> dict:
             if not target:
                 good_abstain += 1
                 round_good_abstain += 1
+                source = (round_data.get("decision_sources") or {}).get(str(voter), "unknown")
+                active_abstain += source == "model"
+                technical_misses += source == "technical_fallback"
+                manual_skips += source == "manual_skip"
+                invalid_targets += source == "invalid_target"
+                unknown_abstain += source == "unknown"
                 continue
             good_valid += 1
             round_good_valid += 1
@@ -179,6 +203,7 @@ def _strategic_analysis(engine, metrics: dict, roles: dict) -> dict:
             "good_max_same_target": peak,
             "votes": round_data.get("votes", {}),
             "totals": round_data.get("totals", {}),
+            "decision_sources": round_data.get("decision_sources", {}),
         })
 
     structured_explosions = getattr(engine, "explosion_events", None)
@@ -192,6 +217,7 @@ def _strategic_analysis(engine, metrics: dict, roles: dict) -> dict:
     good_accuracy = good_wolf_hits / good_valid if good_valid else None
     good_cohesion = good_same_target / good_valid if good_valid else None
     good_abstention = good_abstain / (good_valid + good_abstain) if good_valid + good_abstain else None
+    active_rate = active_abstain / (good_valid + active_abstain) if good_valid + active_abstain else None
     wolf_attack = wolf_good_hits / wolf_valid if wolf_valid else None
     alive = set(metrics["final_alive"])
     final_wolves = sorted(
@@ -203,37 +229,46 @@ def _strategic_analysis(engine, metrics: dict, roles: dict) -> dict:
         flags.append("好人放逐票命中狼人比例偏低，应强化身份交叉验证、票型复盘和临投纠错。")
     if good_cohesion is not None and good_cohesion < 0.6:
         flags.append("好人有效票集中度偏低，应在独立审计后强化证据一致时的协同收票，避免盲从未经验证的警长。")
-    if good_abstention is not None and good_abstention > 0.15:
+    if active_rate is not None and active_rate > 0.15:
         flags.append("好人弃票率偏高，关键轮次应明确二选一并承担投票责任。")
     if getattr(engine, "winner", None) == "狼人" and len(final_wolves) >= 3:
         flags.append("狼人高存活获胜，好人阵营未形成有效身份链和狼坑收敛。")
-    if not flags:
-        flags.append("未发现显著票型纪律异常，下一步结合逐席 reasoning 检查站边依据与身份幻觉。")
-    # —— 计算模型五维战术博弈能力量化指数 (0~100 分) ——
-    # 1. 欺骗成功率 (Deception Index): 狼人存活与误导好人率
-    deception = round(min(100.0, max(20.0, (wolf_attack or 0.5) * 60 + (len(final_wolves) / 4.0) * 40)), 1)
-    # 2. 识谎准确率 (Lie-Detection Accuracy): 好人投中真狼率
-    lie_detect = round(min(100.0, max(20.0, (good_accuracy or 0.4) * 80 + (exiled_wolves / max(1, exiled_wolves + exiled_goods)) * 20)), 1)
-    # 3. 纠错韧性 (Anti-Snowball Rate): 好人票型凝聚与纠偏
-    anti_snowball = round(min(100.0, max(20.0, (good_cohesion or 0.5) * 70 + (1.0 - (good_abstention or 0.0)) * 30)), 1)
-    # 4. 事实账本保真度 (Fact-Consistency): 85~98 标准区间
-    fact_consist = round(min(100.0, max(60.0, 92.0 + (5.0 if not explosions else 0.0))), 1)
-    # 5. Token 效能比 (Token ROI): 信息密度与决策收益
-    token_roi = round(min(100.0, max(50.0, 82.5 + (8.0 if len(exile_rounds) <= 4 else -4.0))), 1)
-
-    tactical_radar = {
-        "deception": deception,
-        "lie_detection": lie_detect,
-        "anti_snowball": anti_snowball,
-        "fact_consistency": fact_consist,
-        "token_roi": token_roi,
-        "overall": round((deception + lie_detect + anti_snowball + fact_consist + token_roi) / 5.0, 1),
-    }
+    if technical_misses:
+        flags.append(f"好人发生{technical_misses}次技术失票，需先排除调用故障，不应解释为主动躲表态。")
+    if not good_valid and not good_abstain and not wolf_valid:
+        flags.append("尚无可统计的放逐票型，无法评估投票表现。")
+    elif not flags:
+        flags.append("当前票型未触发预设阈值；这不代表已验证模型的推理、识谎或纠错能力。")
+    # 仅输出能由本局票型直接计数的描述性统计。0 是有效观测；无分母则为 None。
+    observed_metrics = {}
+    for key, label, numerator, denominator, definition in (
+        ("good_vote_accuracy", "好人投狼比例", good_wolf_hits, good_valid,
+         "投向狼人的好人有效放逐票 / 好人全部有效放逐票"),
+        ("good_vote_cohesion", "好人票型集中度", good_same_target, good_valid,
+         "每轮好人投向同一目标的最多票数之和 / 好人全部有效放逐票"),
+        ("good_abstention_rate", "好人弃票率", good_abstain, good_valid + good_abstain,
+         "好人弃票数 / 好人全部放逐投票记录数"),
+        ("good_active_abstention_rate", "好人主动弃票率", active_abstain, good_valid + active_abstain,
+         "正常返回的主动弃票 / 好人正常返回的有效投票与主动弃票"),
+        ("good_technical_miss_rate", "好人技术失票率", technical_misses, good_valid + good_abstain,
+         "技术失败造成的失票 / 好人全部放逐投票记录数"),
+        ("wolf_vote_good_rate", "狼人投好人比例", wolf_good_hits, wolf_valid,
+         "投向好人的狼人有效放逐票 / 狼人全部有效放逐票"),
+    ):
+        observed_metrics[key] = {
+            "label": label, "numerator": numerator, "denominator": denominator,
+            "value": round(numerator / denominator, 4) if denominator else None,
+            "definition": definition,
+        }
 
     return {
         "good_vote_accuracy": round(good_accuracy, 4) if good_accuracy is not None else None,
         "good_vote_cohesion": round(good_cohesion, 4) if good_cohesion is not None else None,
         "good_abstention_rate": round(good_abstention, 4) if good_abstention is not None else None,
+        "good_active_abstention_rate": round(active_rate, 4) if active_rate is not None else None,
+        "vote_provenance": {"active_abstentions": active_abstain, "technical_misses": technical_misses,
+                            "manual_skips": manual_skips, "invalid_targets": invalid_targets,
+                            "unknown_abstentions": unknown_abstain},
         "wolf_vote_good_rate": round(wolf_attack, 4) if wolf_attack is not None else None,
         "exile_round_count": len(exile_rounds),
         "exiled_wolves": exiled_wolves,
@@ -241,9 +276,18 @@ def _strategic_analysis(engine, metrics: dict, roles: dict) -> dict:
         "wolf_explosions": explosions,
         "final_alive_wolves": final_wolves,
         "exile_rounds": exile_rounds,
-        "tactical_radar": tactical_radar,
+        "metrics_schema_version": 2,
+        "observed_metrics": observed_metrics,
+        # 保留旧字段，明确表示未测量，避免旧消费者误用编造的综合分。
+        "tactical_radar": None,
         "prompt_tuning_flags": flags,
     }
+
+
+def game_statistics(engine) -> dict:
+    """界面和归档共用同一套计数与分母；不推断模型的心理或综合能力。"""
+    roles = {str(s): p.get("role", "") for s, p in engine.players.items()}
+    return _strategic_analysis(engine, _metrics(engine), roles)
 
 
 def _usage_totals(api_rows: list[dict]) -> dict:
@@ -251,7 +295,7 @@ def _usage_totals(api_rows: list[dict]) -> dict:
     player_submitted = {
         str(r.get("request_id")) for r in api_rows
         if r.get("record_type") == "submitted"
-        and r.get("response_kind") != "memory_summary"
+        and r.get("response_kind") not in {"memory_summary", "diagnostic"}
     }
     canceled_ids = {
         str(r.get("request_id")) for r in api_rows
@@ -259,7 +303,7 @@ def _usage_totals(api_rows: list[dict]) -> dict:
     }
     player = [
         r for r in completed
-        if r.get("response_kind") != "memory_summary"
+        if r.get("response_kind") not in {"memory_summary", "diagnostic"}
         and str(r.get("request_id")) not in canceled_ids
     ]
     success = len({str(r.get("request_id")) for r in player if r.get("status") == "success"})
@@ -268,25 +312,40 @@ def _usage_totals(api_rows: list[dict]) -> dict:
     tokens = Counter()
     by_kind = {}
     unmetered_returns = 0
+    receipts, uncertain = {}, set()
     for row in completed:
         kind = str(row.get("response_kind") or "unknown")
-        # 玩家请求可能因 JSON 解析失败重试；每次已返回的 attempt 都实际产生费用。
-        attempt_usages = [
-            attempt.get("usage") for attempt in (row.get("attempts") or [])
-            if attempt.get("usage")
-        ]
-        usages = attempt_usages or ([row.get("usage")] if row.get("usage") else [])
-        kind_counter = by_kind.setdefault(kind, Counter(requests=0))
-        if not usages:
-            kind_counter["requests"] += 1
-            kind_counter["unmetered_returns"] += 1
+        attempts = row.get("attempts") or []
+        if attempts:
+            for index, attempt in enumerate(attempts, 1):
+                key = f"{row.get('request_id')}:{attempt.get('attempt', index)}"
+                if attempt.get("usage") or attempt.get("response_received"):
+                    receipts.setdefault(key, (kind, attempt.get("usage")))
+                elif attempt.get("category") in {"timeout", "read_timeout", "connect_timeout"}:
+                    uncertain.add(key)
+        else:
+            key = f"{row.get('request_id')}:1"
+            if row.get("usage"):
+                receipts.setdefault(key, (kind, row["usage"]))
+            elif (row.get("category") or (row.get("diagnostic") or {}).get("category")) in {
+                    "timeout", "read_timeout", "connect_timeout"}:
+                uncertain.add(key)
+            else:
+                receipts.setdefault(key, (kind, None))
+    for row in api_rows:
+        if row.get("record_type") == "late_usage":
+            key = row.get("attempt_key") or f"{row.get('request_id')}:1"
+            receipts.setdefault(key, (str(row.get("response_kind") or "unknown"), row.get("usage")))
+    uncertain.difference_update(receipts)
+    for kind, usage in receipts.values():
+        counter = by_kind.setdefault(kind, Counter(requests=0))
+        counter["requests"] += 1
+        if not usage:
+            counter["unmetered_returns"] += 1
             unmetered_returns += 1
-        for usage in usages:
-            kind_counter["requests"] += 1
-            values = _usage_values(usage)
-            for key, amount in values.items():
-                tokens[key] += amount
-                kind_counter[key] += amount
+        for key, amount in _usage_values(usage).items():
+            tokens[key] += amount
+            counter[key] += amount
     requests = len(player_submitted)
     fallback_rate = (fallback + canceled) / requests if requests else None
     circuit = any(bool(r.get("circuit_breaker")) for r in completed)
@@ -294,12 +353,19 @@ def _usage_totals(api_rows: list[dict]) -> dict:
         quality = "unknown"
     elif circuit or fallback_rate > 0.30:
         quality = "invalid"
-    elif fallback_rate > 0.10:
+    elif fallback or canceled:
         quality = "degraded"
     else:
         quality = "valid"
     return {
         "quality": quality,
+        "attempt_count": sum(len(r.get("attempts") or []) for r in player),
+        "retried_actions": sum(len(r.get("attempts") or []) > 1 for r in player),
+        "attempt_errors": dict(Counter(a.get("category", "unknown") for r in completed
+                                       for a in (r.get("attempts") or []) if a.get("status") == "error")),
+        "affected_actions": [{"request_id": r.get("request_id"), "seat": r.get("seat"),
+                              "day": r.get("day"), "phase": r.get("phase"), "kind": r.get("response_kind")}
+                             for r in player if r.get("status") != "success"],
         "requests": requests,
         "success": success,
         "fallback": fallback,
@@ -313,26 +379,34 @@ def _usage_totals(api_rows: list[dict]) -> dict:
         "cache_miss_tokens": tokens["cache_miss_tokens"],
         "reasoning_tokens": tokens["reasoning_tokens"],
         "unmetered_returns": unmetered_returns,
+        "unknown_requests": len(uncertain),
         "summary_requests": by_kind.get("memory_summary", {}).get("requests", 0),
         "summary_total_tokens": by_kind.get("memory_summary", {}).get("total_tokens", 0),
         "by_response_kind": {kind: dict(counter) for kind, counter in sorted(by_kind.items())},
     }
 
 
-def _source_snapshot() -> dict:
+def _source_snapshot(engine=None) -> dict:
+    from runtime_version import snapshot
     root = Path(__file__).resolve().parent
     try:
         from ai_agent import SUMMARY_TEMPLATE, SYSTEM_TEMPLATE
     except Exception:
         SUMMARY_TEMPLATE = SYSTEM_TEMPLATE = ""
     return {
+        "runtime": snapshot(engine),
         "files": {
             name: _sha256_file(root / name)
-            for name in ("config.py", "ai_agent.py", "game_engine.py", "roles.py", "app.py")
+            for name in ("config.py", "ai_agent.py", "game_engine.py", "roles.py", "app.py",
+                         "game_service.py", "game_archive.py", "ui_runtime.py",
+                         "ui_design.py", "ui_preview.py", "ui_theme.py", "view_projection.py",
+                         "feed_ui.py", "live_feed.py", "model_protocol.py", "public_memory.py", "runtime_version.py",
+                         "room_view.py", "room_registry.py", "replay_frames.py", "replay_reader.py", "spectator_ui.py")
         },
         "prompts": {
             "system_template_sha256": _sha256_text(SYSTEM_TEMPLATE),
             "summary_template_sha256": _sha256_text(SUMMARY_TEMPLATE),
+            "system_template": SYSTEM_TEMPLATE, "summary_template": SUMMARY_TEMPLATE,
         },
     }
 
@@ -356,6 +430,8 @@ def _summary_markdown(metadata, players, metrics, analysis, api_quality, replay_
         "## 模型调用质量", "",
         f"- 玩家请求：{api_quality['requests']}（成功 {api_quality['success']}，兜底 {api_quality['fallback']}，取消 {api_quality['canceled']}）",
         f"- 兜底率：{_pct(api_quality['fallback_rate'])}",
+        f"- 玩家调用尝试：{api_quality.get('attempt_count', 0)} / 发生重试的行动：{api_quality.get('retried_actions', 0)}",
+        f"- 尝试失败分类：{api_quality.get('attempt_errors', {})}",
         f"- Token：输入 {api_quality['prompt_tokens']} / 输出 {api_quality['completion_tokens']} / 合计 {api_quality['total_tokens']}",
         f"- Prompt 缓存：命中 {api_quality['cache_hit_tokens']} / 未命中 {api_quality['cache_miss_tokens']}",
         f"- 隐式推理 Token：{api_quality['reasoning_tokens']}",
@@ -373,33 +449,29 @@ def _summary_markdown(metadata, players, metrics, analysis, api_quality, replay_
         "", "## 票型指标", "",
         f"- 放逐轮数：{analysis['exile_round_count']}",
         f"- 放逐狼人 / 好人：{analysis['exiled_wolves']} / {analysis['exiled_goods']}",
-        f"- 好人投狼准确率：{_pct(analysis['good_vote_accuracy'])}",
+        f"- 好人投狼比例：{_pct(analysis['good_vote_accuracy'])}",
         f"- 好人票型集中度：{_pct(analysis['good_vote_cohesion'])}",
-        f"- 好人弃票率：{_pct(analysis['good_abstention_rate'])}",
+        f"- 好人原始弃票率：{_pct(analysis['good_abstention_rate'])}",
+        f"- 好人主动弃票率：{_pct(analysis.get('good_active_abstention_rate'))}",
+        f"- 失票归因：{analysis.get('vote_provenance', {})}",
         "", "### 每轮完整票型", "",
     ]
     if analysis["exile_rounds"]:
         for item in analysis["exile_rounds"]:
             vote_text = "，".join(
-                f"{v}号→{t}号" if _seat(t) else f"{v}号→弃票"
+                f"{v}号→{t}号" if _seat(t) else f"{v}号→未投票（来源：{(item.get('decision_sources') or {}).get(str(v), 'unknown')}）"
                 for v, t in (item.get("votes") or {}).items()
             ) or "无有效票"
             lines.append(f"- {item['title']}：{vote_text}；出局：{item.get('winner') or '无人'}")
     else:
         lines.append("- N/A（无有效放逐票型）")
-    radar = analysis.get("tactical_radar") or {}
-    if radar:
-        lines += [
-            "", "## 🎯 LLM 战术博弈能力量化雷达 (0~100)", "",
-            f"| 评估维度 | 指标评分 | 战术释义 |",
-            f"|---|:---:|---|",
-            f"| 🎭 **欺骗成功率** (Deception) | **{radar.get('deception', 0)}** | 狼人伪装神职/好人、冲票与误导好人成功率 |",
-            f"| 🔍 **识谎准确率** (Lie-Detection) | **{radar.get('lie_detection', 0)}** | 好人放逐票命中真狼与排坑速度 |",
-            f"| 🛡️ **纠错韧性** (Anti-Snowball) | **{radar.get('anti_snowball', 0)}** | 关键轮次站错边后的自纠与协同能力 |",
-            f"| 📜 **事实账本保真度** (Fact-Consistency) | **{radar.get('fact_consistency', 0)}** | 规则遵守、无幻觉与客观账本遵从度 |",
-            f"| ⚡ **Token 效能比** (Token ROI) | **{radar.get('token_roi', 0)}** | 单位胜率与信息交互所消耗的有效产出比 |",
-            f"| ⭐ **综合博弈评级** (Overall) | **{radar.get('overall', 0)}** | 全盘多智能体战术对抗综合表现 |",
-        ]
+    lines += ["", "### 指标计数与定义", ""]
+    for metric in analysis.get("observed_metrics", {}).values():
+        lines.append(
+            f"- {metric['label']}：{_pct(metric['value'])}"
+            f"（{metric['numerator']} / {metric['denominator']}）；{metric['definition']}。"
+        )
+    lines.append("- 以上是本局描述性票型统计，不代表识谎、事实保真度或 Token 效能的实测综合评级。")
     lines += ["", "## Prompt 调整线索", ""]
     lines.extend(f"- {flag}" for flag in analysis["prompt_tuning_flags"])
     lines += ["", "## 引擎关键复盘", "", replay_text.rstrip() or "（暂无关键事件）", ""]
@@ -499,11 +571,19 @@ def archive_game(engine, directory, reason: str = "game_end", force: bool = Fals
     manifest = {
         "metadata": metadata,
         "config": config_snapshot,
-        "source_snapshot": _source_snapshot(),
+        "source_snapshot": _source_snapshot(engine),
         "api_quality": api_quality,
         "analysis": analysis,
         "files": {k: os.path.basename(v) for k, v in paths.items() if k != "directory"},
     }
+    display_path = recorder.directory / "replay_manifest.json"
+    if display_path.exists():
+        try:
+            manifest["display_replay"] = json.loads(display_path.read_text(encoding="utf-8"))
+            for name in ("replay_frames.jsonl", "replay_items.jsonl", "replay_manifest.json"):
+                manifest["files"][name.removesuffix(".jsonl").removesuffix(".json")] = name
+        except (OSError, ValueError):
+            manifest["display_replay"] = {"status": "unreadable"}
     recorder.record_event("archive_snapshot", reason=reason, completed=completed, api_quality=api_quality)
     recorder.write_json("final_state.json", final_state)
     recorder.write_json("manifest.json", manifest)
@@ -546,6 +626,9 @@ def _index_row_from_manifest(path: Path) -> dict | None:
         "good_vote_accuracy": analysis.get("good_vote_accuracy", ""),
         "good_vote_cohesion": analysis.get("good_vote_cohesion", ""),
         "archive_path": str(path.parent),
+        "api_attempt_count": api.get("attempt_count", ""), "retried_actions": api.get("retried_actions", ""),
+        "good_active_abstention_rate": analysis.get("good_active_abstention_rate", ""),
+        "good_technical_misses": (analysis.get("vote_provenance") or {}).get("technical_misses", ""),
     }
 
 
