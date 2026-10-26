@@ -224,10 +224,12 @@ class DisplayReplay:
                                 replay._unpack_rows(view["public_log"])
                                 for tail in view["reasoning_log"].values():
                                     replay._unpack_rows(tail)
-                                if any(r["cursor"] == entry["cursor"] for r in replay.timelines[key]):
+                                if entry["cursor"] in replay._cursor_indexes[key]:
                                     raise ValueError("重复展示游标")
                             for key, entry in row["changes"].items():
-                                replay.timelines[key].append(entry)
+                                timeline = replay.timelines[key]
+                                timeline.append(entry)
+                                replay._cursor_indexes[key][entry["cursor"]] = len(timeline) - 1
                             replay.frames += 1
                     except (ValueError, KeyError, TypeError):
                         replay.issue = "记录存在缺口，仅展示已校验的前缀。"
