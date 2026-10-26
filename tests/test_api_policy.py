@@ -12,7 +12,7 @@ from agent.ai_agent import AgentManager
 from storage.game_archive import _usage_totals
 from engine.game_engine import GameEngine
 from service.game_service import GameService
-from agent.model_protocol import error_category, provider_for
+from agent.model_protocol import error_category, provider_for, validate_base_url
 from service.view_projection import project_api_health
 
 
@@ -117,7 +117,8 @@ class PolicyTests(unittest.TestCase):
         self.assertTrue(manager.get_health_snapshot()["circuit_open"])
 
     def test_generic_endpoint_gets_no_deepseek_private_parameters(self):
-        manager = self.manager(base_url="https://example.invalid/v1")
+        with patch.dict("os.environ", {"SWV_ALLOWED_MODEL_HOSTS": "example.invalid"}):
+            manager = self.manager(base_url="https://example.invalid/v1")
         manager._create_with_hard_timeout = Mock(return_value=completion())
         self.call(manager)
         kwargs = manager._create_with_hard_timeout.call_args.kwargs
@@ -125,6 +126,32 @@ class PolicyTests(unittest.TestCase):
         self.assertNotIn("reasoning_effort", kwargs)
         self.assertEqual(provider_for("https://api.deepseek.com.evil.invalid"), "generic")
         self.assertEqual(provider_for("https://example.invalid", "deepseek"), "deepseek")
+
+    def test_base_url_requires_trusted_https_endpoint(self):
+        self.assertEqual(validate_base_url("https://api.deepseek.com/v1"), "https://api.deepseek.com/v1")
+        self.assertEqual(validate_base_url("https://api.openai.com/v1"), "https://api.openai.com/v1")
+        for unsafe in (
+            "http://api.deepseek.com/v1",
+            "https://user:secret@api.deepseek.com/v1",
+            "https://api.deepseek.com/v1?api_key=secret",
+            "http://127.0.0.1:11434/v1",
+            "http://169.254.169.254/latest/meta-data",
+            "https://example.invalid/v1",
+        ):
+            with self.subTest(unsafe=unsafe), self.assertRaises(ValueError):
+                validate_base_url(unsafe)
+
+    def test_custom_and_private_endpoints_need_explicit_self_hosted_configuration(self):
+        with patch.dict("os.environ", {"SWV_ALLOWED_MODEL_HOSTS": "example.invalid"}):
+            self.assertEqual(validate_base_url("https://example.invalid/v1"), "https://example.invalid/v1")
+        with patch.dict("os.environ", {"SWV_ALLOW_PRIVATE_MODEL_URLS": "1"}):
+            self.assertEqual(validate_base_url("http://127.0.0.1:11434/v1"), "http://127.0.0.1:11434/v1")
+
+    def test_global_request_limit_timeout_does_not_start_http_worker(self):
+        manager = self.manager()
+        with patch("agent.ai_agent._MODEL_REQUEST_SLOTS", threading.BoundedSemaphore(0)):
+            with self.assertRaises(TimeoutError):
+                manager._create_with_hard_timeout(0.01)
 
     def test_auth_and_balance_errors_stop_after_one_call(self):
         for code, category in [(401, "auth"), (402, "balance"), (403, "permission")]:
