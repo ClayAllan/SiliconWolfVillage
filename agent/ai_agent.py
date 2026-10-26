@@ -16,6 +16,7 @@ V3.0 变化：
 
 import json
 import copy
+import os
 import re
 import threading
 import time
@@ -27,10 +28,22 @@ from openai import OpenAI
 
 from engine import config
 from engine.roles import ROLE_CLASSES   # 仅取各身份的 camp(类属性)做阵营路由；roles 不反向 import 本模块
-from agent.model_protocol import (ERROR_LABELS, ResponseProtocolError, provider_for, output_budget,
-                            request_options, message_metadata, validate_content, parse_action,
-                            error_category, action_instruction)
+from agent.model_protocol import (ERROR_LABELS, ResponseProtocolError, provider_for, validate_base_url,
+                            output_budget, request_options, message_metadata, validate_content,
+                            parse_action, error_category, action_instruction)
 from agent.public_memory import select_evidence
+
+
+def _positive_env_int(name, default):
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+# A process-wide cap prevents each Streamlit session from multiplying outbound model traffic.
+_MODEL_REQUEST_LIMIT = _positive_env_int("SWV_MAX_CONCURRENT_MODEL_REQUESTS", 24)
+_MODEL_REQUEST_SLOTS = threading.BoundedSemaphore(_MODEL_REQUEST_LIMIT)
 
 
 ROLE_RULE_TEXT = {
@@ -174,6 +187,7 @@ class AgentManager:
         thinking: bool = True,
         reasoning_effort: str = "low",
     ):
+        base_url = validate_base_url(base_url)
         self.provider = provider_for(base_url, provider_mode)
         if reasoning_effort not in {"low", "high", "max"}:
             raise ValueError("思考强度须为 low、high 或 max")
@@ -449,6 +463,9 @@ class AgentManager:
 
     def _create_with_hard_timeout(self, timeout_s, *, request_context=None, **kwargs):
         """墙钟限时；晚到响应仅补记用量，不提交行动或改变健康状态。"""
+        wait_budget = max(0.0, float(timeout_s))
+        if not _MODEL_REQUEST_SLOTS.acquire(timeout=wait_budget):
+            raise TimeoutError("服务器模型请求并发已达上限；请稍后重试")
         box, box_lock = {}, threading.Lock()
         client = self.client
         transport_id = uuid.uuid4().hex
@@ -477,10 +494,17 @@ class AgentManager:
             finally:
                 with self._transport_lock:
                     self._transport_calls.discard(transport_id)
+                _MODEL_REQUEST_SLOTS.release()
 
         thread = threading.Thread(target=worker, name="wolf-model-http", daemon=True)
-        thread.start()
-        thread.join(max(0, timeout_s))
+        try:
+            thread.start()
+        except Exception:
+            with self._transport_lock:
+                self._transport_calls.discard(transport_id)
+            _MODEL_REQUEST_SLOTS.release()
+            raise
+        thread.join(wait_budget)
         with box_lock:
             if not box.get("done"):
                 box["abandoned"] = True
