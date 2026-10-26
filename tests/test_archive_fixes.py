@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 from engine import config
 from agent.ai_agent import AgentManager
-from storage.game_archive import game_statistics, _usage_totals, _source_snapshot
+from storage.game_archive import game_statistics, _usage_totals, _source_snapshot, _sanitize_base_url
 from engine.game_engine import GameEngine
 from agent.model_protocol import parse_action, validate_content, ResponseProtocolError, request_options
 from agent.public_memory import select_evidence
@@ -105,6 +105,14 @@ class RulesManager:
 
 
 class ArchiveFixTests(unittest.TestCase):
+    def test_archive_base_url_redacts_userinfo_query_and_fragment(self):
+        self.assertEqual(
+            _sanitize_base_url("https://user:super-secret@example.com:8443/v1?token=query-secret#frag"),
+            "https://example.com:8443/v1",
+        )
+        self.assertEqual(_sanitize_base_url("https://api.deepseek.com/v1"), "https://api.deepseek.com/v1")
+        self.assertEqual(_sanitize_base_url("not a URL"), "")
+
     def setUp(self):
         network = patch("openai.resources.chat.completions.Completions.create",
                         side_effect=AssertionError("离线回归禁止模型网络"))
