@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import secrets
+import threading
 
 from service.room_view import project_room
 
@@ -26,6 +27,8 @@ class DisplayReplay:
         self.issue = ""
         self._pending = None
         self._sequence_nodes = {}
+        self._row_chain_cache = {}
+        self._lock = threading.RLock()
         if self.directory:
             self.directory.mkdir(parents=True, exist_ok=True)
             if (self.directory / "replay_frames.jsonl").exists():
@@ -57,21 +60,38 @@ class DisplayReplay:
             self.items[key] = copy.deepcopy(value)
         return key
 
-    def _pack(self, view):
+    def _pack(self, view, audience, engine):
         view = copy.deepcopy(view)
-        view["public_log"] = self._pack_rows(view["public_log"])
-        view["reasoning_log"] = {s: self._pack_rows(rows) for s, rows in view["reasoning_log"].items()}
+        view["public_log"] = self._pack_rows(
+            view["public_log"], (audience, "public"), id(engine.public_log)
+        )
+        reasoning_sources = getattr(engine, "reasoning_log", {}) or {}
+        view["reasoning_log"] = {
+            seat: self._pack_rows(
+                rows, (audience, "reasoning", seat), id(reasoning_sources.get(int(seat), []))
+            )
+            for seat, rows in view["reasoning_log"].items()
+        }
         return self._intern(view)
 
-    def _pack_rows(self, rows):
-        # Immutable prefix chains store each new row once, including across audiences.
-        tail = None
-        for row in rows:
+    def _pack_rows(self, rows, cache_key=None, source_id=None):
+        # Reuse an immutable prefix for append-only engine logs. A replacement list
+        # (for example after load_state) invalidates the cache and rebuilds safely.
+        cached = self._row_chain_cache.get(cache_key) if cache_key is not None else None
+        if cached and cached["source_id"] == source_id and cached["length"] <= len(rows):
+            start, tail = cached["length"], cached["tail"]
+        else:
+            start, tail = 0, None
+        for row in rows[start:]:
             entry = self._intern(row)
             pair = (tail, entry)
             if pair not in self._sequence_nodes:
                 self._sequence_nodes[pair] = self._intern({"previous": tail, "entry": entry})
             tail = self._sequence_nodes[pair]
+        if cache_key is not None:
+            self._row_chain_cache[cache_key] = {
+                "source_id": source_id, "length": len(rows), "tail": tail,
+            }
         return tail
 
     def _unpack_rows(self, tail):
@@ -89,13 +109,17 @@ class DisplayReplay:
         return list(reversed(rows))
 
     def capture(self, engine):
+        with self._lock:
+            return self._capture_locked(engine)
+
+    def _capture_locked(self, engine):
         if self.frames >= self.MAX_FRAMES:
             raise OSError("展示帧达到容量上限")
         if self._pending is None:
             self._pending = {key: project_room(engine, *(["seat", int(key.split(":")[1])] if key.startswith("seat:") else [key])) for key in self.timelines}
         changes = {}
         for audience, view in self._pending.items():
-            ref = self._pack(view)
+            ref = self._pack(view, audience, engine)
             old = self.timelines[audience]
             if not old or old[-1]["ref"] != ref:
                 changes[audience] = {"cursor": secrets.token_urlsafe(18), "ref": ref}
@@ -117,6 +141,10 @@ class DisplayReplay:
         self.issue = ""
 
     def read(self, audience, cursor=None):
+        with self._lock:
+            return self._read_locked(audience, cursor)
+
+    def _read_locked(self, audience, cursor=None):
         timeline = self.timelines[audience]
         if not timeline:
             raise ValueError("暂无可读取的展示记录")
@@ -129,9 +157,30 @@ class DisplayReplay:
         result["cursor"] = entry["cursor"]
         return result
 
+    def _timeline_since_locked(self, audience, start=0):
+        timeline = self.timelines[audience]
+        if type(start) is not int or start < 0 or start > len(timeline):
+            start = 0
+        return [{"cursor": row["cursor"], "day": self.items[row["ref"]]["day"],
+                 "phase": self.items[row["ref"]]["phase"]} for row in timeline[start:]]
+
     def timeline(self, audience):
-        return [{"cursor": r["cursor"], "day": self.items[r["ref"]]["day"],
-                 "phase": self.items[r["ref"]]["phase"]} for r in self.timelines[audience]]
+        with self._lock:
+            return self._timeline_since_locked(audience, 0)
+
+    def read_packet(self, audience, cursor=None, *, timeline_from=None, include_view=True):
+        """Read an authorized view and only the timeline suffix the caller has not cached."""
+        with self._lock:
+            length = len(self.timelines[audience])
+            start = 0 if timeline_from is None else timeline_from
+            timeline = self._timeline_since_locked(audience, start)
+            view = self._read_locked(audience, cursor) if include_view else None
+            return {
+                "view": view,
+                "timeline": timeline,
+                "timeline_revision": length,
+                "issue": self.issue,
+            }
 
     @classmethod
     def load(cls, directory):
