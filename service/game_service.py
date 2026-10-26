@@ -12,9 +12,9 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-import config
-from game_archive import archive_game
-from ui_runtime import rerun_delay
+from engine import config
+from storage.game_archive import archive_game
+from ui.ui_runtime import rerun_delay
 
 
 class _UsageSnapshot:
@@ -74,7 +74,7 @@ class GameService:
         self.revision = 0
         self.display_replay = None
         if record_display:
-            from replay_frames import DisplayReplay
+            from storage.replay_frames import DisplayReplay
             directory = engine.recorder.directory if engine.recorder else Path(replay_directory) / engine.game_id
             self.display_replay = DisplayReplay(engine.game_id, directory)
             self.display_replay.capture(engine)
@@ -121,7 +121,7 @@ class GameService:
 
     def apply_model_settings(self, **settings):
         """只在干净暂停边界更换客户端，不推进生成器、不发网络请求。"""
-        from ai_agent import AgentManager
+        from agent.ai_agent import AgentManager
 
         with self._condition:
             if self._closed or self._done:

@@ -9,19 +9,19 @@ import uuid
 
 import streamlit as st
 
-import config
-import ui_design as design
-from ui_preview import preview_engine
-from view_projection import project_view, faction_counts, project_api_health
-from model_protocol import ERROR_LABELS
-from session_storage import storage_paths
-from ai_agent import AgentManager
-from game_archive import game_statistics
-from game_engine import GameEngine
-from game_service import GameService
-from ui_runtime import AUTO_POLL_SECONDS
-from live_feed import schedule_page_refresh
-from feed_ui import render_feed
+from engine import config
+from ui import ui_design as design
+from ui.ui_preview import preview_engine
+from service.view_projection import project_view, faction_counts, project_api_health
+from agent.model_protocol import ERROR_LABELS
+from storage.session_storage import storage_paths
+from agent.ai_agent import AgentManager
+from storage.game_archive import game_statistics
+from engine.game_engine import GameEngine
+from service.game_service import GameService
+from ui.ui_runtime import AUTO_POLL_SECONDS
+from service.live_feed import schedule_page_refresh
+from ui.feed_ui import render_feed
 
 # 手动进度存档与自动终局档案分开保存。
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -38,7 +38,7 @@ st.markdown(design.stylesheet(st.context.theme.type), unsafe_allow_html=True)
 
 # An invitation routes into a separate read-only page before any owner state is initialized.
 if st.query_params.get_all("room"):
-    from spectator_ui import spectator_entry
+    from ui.spectator_ui import spectator_entry
     if len(st.query_params.get_all("room")) != 1:
         st.error("房间参数重复，请使用房主提供的完整链接。")
     else:
@@ -184,7 +184,7 @@ def install_game(engine, *, automatic, delay, turbo=False, generator=None):
                           record_display=bool(st.session_state.get("enable_sharing", False)))
     receipt = None
     if service.display_replay is not None:
-        from room_registry import get_registry
+        from service.room_registry import get_registry
         try:
             receipt = get_registry().register(service=service)
         except Exception:
@@ -575,7 +575,7 @@ with st.sidebar:
     st.caption("自动推演由服务器后台推进；关闭网页后仍会继续并消耗 API。离开前需要停止时请先暂停。")
     st.caption("API Key 仅用于本次对局。存档按会话隔离，请及时下载；重新连接后可能无法找回。服务进程重启后不自动续跑。")
 
-from spectator_ui import owner_panel
+from ui.spectator_ui import owner_panel
 owner_replay_playing = owner_panel(st, REPLAY_DIR)
 
 # ---------------- 工作台主视图 ----------------

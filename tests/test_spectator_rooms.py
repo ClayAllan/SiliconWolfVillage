@@ -7,13 +7,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import config
-from game_engine import GameEngine
-from game_service import GameService
-from replay_frames import DisplayReplay
-from replay_reader import legacy_public_rows
-from room_registry import RoomRegistry
-from room_view import project_room
+from engine import config
+from engine.game_engine import GameEngine
+from service.game_service import GameService
+from storage.replay_frames import DisplayReplay
+from storage.replay_reader import legacy_public_rows
+from service.room_registry import RoomRegistry
+from service.room_view import project_room
 from test_game_service import ServiceManager
 
 

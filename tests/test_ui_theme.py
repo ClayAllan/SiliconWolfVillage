@@ -2,8 +2,8 @@ import unittest
 import tomllib
 from pathlib import Path
 
-from ui_theme import DARK, LIGHT, contrast_ratio, theme_variables
-from ui_design import stylesheet
+from ui.ui_theme import DARK, LIGHT, contrast_ratio, theme_variables
+from ui.ui_design import stylesheet
 
 
 class ThemeTests(unittest.TestCase):

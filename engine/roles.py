@@ -844,5 +844,5 @@ def validate_board_roles(board_roles):
     return names
 
 
-from runtime_version import register_source as _register_source
+from engine.runtime_version import register_source as _register_source
 _register_source(__name__, __file__)

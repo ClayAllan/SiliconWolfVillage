@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import secrets
 
-from room_view import project_room
+from service.room_view import project_room
 
 
 def canonical(value):

@@ -1,7 +1,7 @@
 """固定示例快照。仅用于界面预览，不创建后台服务、网络客户端或 API 请求。"""
-from game_engine import GameEngine
-from roles import create_role
-import config
+from engine.game_engine import GameEngine
+from engine.roles import create_role
+from engine import config
 
 
 class PreviewManager:

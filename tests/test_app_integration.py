@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
-from ai_agent import AgentManager
-from game_engine import GameEngine
+from agent.ai_agent import AgentManager
+from engine.game_engine import GameEngine
 
 
 APP = Path(__file__).resolve().parents[1] / "app.py"
@@ -24,7 +24,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.replays = Path(folder.name) / "replays"
         self.saves.mkdir()
         self.replays.mkdir()
-        storage = patch("session_storage.storage_paths", return_value=(str(self.saves), str(self.replays)))
+        storage = patch("storage.session_storage.storage_paths", return_value=(str(self.saves), str(self.replays)))
         storage.start()
         self.addCleanup(storage.stop)
         # 防止未来修改让测试意外访问真实模型服务。
@@ -170,8 +170,8 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertIsNone(self.app.session_state["game_service"])
 
     def test_old_150_row_terminal_does_not_survive_new_64_row_game(self):
-        from game_service import GameService
-        import config
+        from service.game_service import GameService
+        from engine import config
 
         def make_engine(count, old=False):
             manager = AgentManager(api_key="offline", base_url="https://example.invalid")
@@ -286,7 +286,7 @@ class AppIntegrationTests(unittest.TestCase):
             self.assertTrue(any(e.label == "API 诊断与恢复" for e in self.app.expander))
 
     def test_sharing_opt_in_and_observer_route_never_loads_owner_controls(self):
-        from room_registry import get_registry
+        from service.room_registry import get_registry
         self.app.checkbox(key="enable_sharing").check().run()
         self.start_manual()
         room, owner = self.app.session_state["room_receipt"]

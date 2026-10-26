@@ -1,7 +1,7 @@
 """对局动态的有界容器与定向滚动控件。"""
 import json
 
-from live_feed import feed_identity, prepare_feed_state, request_scroll, unread_events
+from service.live_feed import feed_identity, prepare_feed_state, request_scroll, unread_events
 
 
 def scroll_script(identity, command, sequence):

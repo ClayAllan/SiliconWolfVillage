@@ -3,8 +3,8 @@ from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass
 
-import config
-from live_feed import project_events
+from engine import config
+from service.live_feed import project_events
 
 
 def project_api_health(health, viewer_seat=None):

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import unittest
 
-from ui_runtime import AUTO_POLL_SECONDS, VISIBLE_RERUN_FLOOR_SECONDS, rerun_delay
+from ui.ui_runtime import AUTO_POLL_SECONDS, VISIBLE_RERUN_FLOOR_SECONDS, rerun_delay
 
 
 class UiRuntimeTests(unittest.TestCase):

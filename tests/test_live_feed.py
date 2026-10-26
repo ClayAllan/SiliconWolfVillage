@@ -1,8 +1,8 @@
 import unittest
 
-import config
-from game_engine import GameEngine
-from live_feed import (feed_identity, project_events, prepare_feed_state,
+from engine import config
+from engine.game_engine import GameEngine
+from service.live_feed import (feed_identity, project_events, prepare_feed_state,
                        request_scroll, unread_events, schedule_page_refresh)
 from test_runtime_regressions import MemoryOnlyManager
 

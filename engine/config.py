@@ -7,7 +7,7 @@ config.py —— 全局配置中心
 """
 
 import os
-from roles import ROLE_CLASSES
+from engine.roles import ROLE_CLASSES
 
 # ============================================================
 # 一、大模型 API 配置（兼容 OpenAI 格式，默认适配 DeepSeek）

@@ -24,10 +24,10 @@ import uuid
 from collections import Counter
 from datetime import datetime
 
-import config
-from replay_recorder import GameRecorder
+from engine import config
+from storage.replay_recorder import GameRecorder
 # ★V6.3 角色多态：解析工具与角色类下沉到 roles.py（roles 不反向 import 本模块 → 无循环依赖）
-from roles import create_role, parse_seat, validate_board_roles
+from engine.roles import create_role, parse_seat, validate_board_roles
 
 
 # ============================================================
@@ -2291,5 +2291,5 @@ class GameEngine:
                 + "只输出严格JSON：{\"reasoning\":\"判断依据\",\"vote_target\":X}，X为放逐目标座位号，弃票填0。")
 
 
-from runtime_version import register_source as _register_source
+from engine.runtime_version import register_source as _register_source
 _register_source(__name__, __file__)

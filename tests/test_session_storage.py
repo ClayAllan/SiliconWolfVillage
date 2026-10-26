@@ -1,6 +1,6 @@
 import unittest
 import uuid
-from session_storage import storage_paths
+from storage.session_storage import storage_paths
 
 
 class SessionStorageTests(unittest.TestCase):

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from game_archive import _usage_totals, archive_game, game_statistics, should_archive
+from storage.game_archive import _usage_totals, archive_game, game_statistics, should_archive
 
 
 class FakeManager:

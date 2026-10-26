@@ -25,12 +25,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 from openai import OpenAI
 
-import config
-from roles import ROLE_CLASSES   # 仅取各身份的 camp(类属性)做阵营路由；roles 不反向 import 本模块
-from model_protocol import (ERROR_LABELS, ResponseProtocolError, provider_for, output_budget,
+from engine import config
+from engine.roles import ROLE_CLASSES   # 仅取各身份的 camp(类属性)做阵营路由；roles 不反向 import 本模块
+from agent.model_protocol import (ERROR_LABELS, ResponseProtocolError, provider_for, output_budget,
                             request_options, message_metadata, validate_content, parse_action,
                             error_category, action_instruction)
-from public_memory import select_evidence
+from agent.public_memory import select_evidence
 
 
 ROLE_RULE_TEXT = {
@@ -1357,5 +1357,5 @@ class AgentManager:
             k in msg for k in ("not found", "does not exist", "unsupported model", "invalid model", "不存在", "无效"))
 
 
-from runtime_version import register_source as _register_source
+from engine.runtime_version import register_source as _register_source
 _register_source(__name__, __file__)

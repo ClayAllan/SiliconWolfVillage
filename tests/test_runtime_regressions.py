@@ -9,9 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import config
-from ai_agent import AgentManager
-from game_engine import GameEngine
+from engine import config
+from agent.ai_agent import AgentManager
+from engine.game_engine import GameEngine
 
 
 class MemoryOnlyManager:
@@ -360,7 +360,7 @@ class EngineRegressionTests(unittest.TestCase):
 
 
     def test_all_numbers_does_not_split_large_numbers_into_seats(self):
-        from roles import _all_numbers, parse_seat
+        from engine.roles import _all_numbers, parse_seat
         text = "我有100%把握，2026年，归票7号"
         nums = _all_numbers(text)
         self.assertEqual(nums, [7])
@@ -373,7 +373,7 @@ class EngineRegressionTests(unittest.TestCase):
         self.assertEqual(target, 7)
 
     def test_hunter_does_not_shoot_on_passing_mention(self):
-        from roles import parse_hunter
+        from engine.roles import parse_hunter
         cands = [3, 5, 8]
         # 仅加油/提及，不应开枪
         self.assertIsNone(parse_hunter("天哪我倒了，好人加油，预言家3号你要挺住", cands))
@@ -453,7 +453,7 @@ class EngineRegressionTests(unittest.TestCase):
         self.assertEqual(deaths.get(8), "wolf")
 
     def test_unmeasured_tactical_scores_are_not_invented(self):
-        from game_archive import _strategic_analysis
+        from storage.game_archive import _strategic_analysis
         fake_engine = GameEngine(MemoryOnlyManager())
         fake_engine.setup(config.GAME_BOARDS["12人标准预女猎守"])
         fake_metrics = {
@@ -476,7 +476,7 @@ class EngineRegressionTests(unittest.TestCase):
         self.assertTrue(analysis["observed_metrics"])
 
     def test_every_board_counts_each_surviving_god_before_slaughter(self):
-        from roles import ROLE_CLASSES
+        from engine.roles import ROLE_CLASSES
         for name, board in config.GAME_BOARDS.items():
             for god_name in set(board):
                 if not ROLE_CLASSES[god_name].is_god:

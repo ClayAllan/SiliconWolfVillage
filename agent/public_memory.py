@@ -25,5 +25,5 @@ def select_evidence(entries, cursor=0, max_chars=16000):
     return "\n".join(line for _, line in selected), ids, omitted
 
 
-from runtime_version import register_source as _register_source
+from engine.runtime_version import register_source as _register_source
 _register_source(__name__, __file__)

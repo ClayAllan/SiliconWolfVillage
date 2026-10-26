@@ -3,7 +3,7 @@ import json
 import re
 from urllib.parse import urlparse
 
-import config
+from engine import config
 
 
 class ResponseProtocolError(ValueError):
@@ -240,5 +240,5 @@ def error_category(error, status=None):
     return "unknown"
 
 
-from runtime_version import register_source as _register_source
+from engine.runtime_version import register_source as _register_source
 _register_source(__name__, __file__)

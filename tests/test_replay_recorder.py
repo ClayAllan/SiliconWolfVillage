@@ -9,10 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from replay_recorder import GameRecorder
-import config
-from ai_agent import AgentManager
-from game_engine import GameEngine
+from storage.replay_recorder import GameRecorder
+from engine import config
+from agent.ai_agent import AgentManager
+from engine.game_engine import GameEngine
 
 
 class RecorderTests(unittest.TestCase):

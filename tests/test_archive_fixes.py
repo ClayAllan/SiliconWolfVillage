@@ -8,13 +8,13 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
-import config
-from ai_agent import AgentManager
-from game_archive import game_statistics, _usage_totals, _source_snapshot
-from game_engine import GameEngine
-from model_protocol import parse_action, validate_content, ResponseProtocolError, request_options
-from public_memory import select_evidence
-from roles import parse_yes_save
+from engine import config
+from agent.ai_agent import AgentManager
+from storage.game_archive import game_statistics, _usage_totals, _source_snapshot
+from engine.game_engine import GameEngine
+from agent.model_protocol import parse_action, validate_content, ResponseProtocolError, request_options
+from agent.public_memory import select_evidence
+from engine.roles import parse_yes_save
 
 
 WITCH_SPEECH = "救。7号首夜被刀，我决定使用解药救他，先保一个信息位。若不救，好人直接少一人，信息也更少。先救。"
@@ -299,7 +299,7 @@ class ArchiveFixTests(unittest.TestCase):
         self.assertNotIn("config", runtime["loaded_sources"])
 
     def test_zero_vote_chart_distinguishes_technical_failure(self):
-        import ui_design
+        from ui import ui_design
         source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
         function = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == "render_vote_chart")
         namespace = {"design": ui_design}

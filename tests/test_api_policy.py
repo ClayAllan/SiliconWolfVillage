@@ -7,13 +7,13 @@ import unittest
 from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
-import config
-from ai_agent import AgentManager
-from game_archive import _usage_totals
-from game_engine import GameEngine
-from game_service import GameService
-from model_protocol import error_category, provider_for
-from view_projection import project_api_health
+from engine import config
+from agent.ai_agent import AgentManager
+from storage.game_archive import _usage_totals
+from engine.game_engine import GameEngine
+from service.game_service import GameService
+from agent.model_protocol import error_category, provider_for
+from service.view_projection import project_api_health
 
 
 def completion(content='{"speech":"我暂不站边","vote_target":3}', *, finish="stop", tokens=80, reasoning=30):
@@ -143,7 +143,7 @@ class PolicyTests(unittest.TestCase):
         error.status_code = 429
         error.response = NS(headers={"retry-after": "90"})
         manager._create_with_hard_timeout = Mock(side_effect=error)
-        with patch("ai_agent.time.sleep") as sleep:
+        with patch("agent.ai_agent.time.sleep") as sleep:
             result = self.call(manager)
         self.assertEqual(manager._create_with_hard_timeout.call_count, 1)
         sleep.assert_not_called()
@@ -192,7 +192,7 @@ class PolicyTests(unittest.TestCase):
             now[0] = 2.0
             return completion("", finish="length")
         manager._create_with_hard_timeout = Mock(side_effect=slow)
-        with patch("ai_agent.time.monotonic", side_effect=lambda: now[0]):
+        with patch("agent.ai_agent.time.monotonic", side_effect=lambda: now[0]):
             self.call(manager)
         self.assertEqual(manager._create_with_hard_timeout.call_count, 1)
 

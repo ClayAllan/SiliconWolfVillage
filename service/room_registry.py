@@ -6,7 +6,7 @@ import threading
 import time
 from contextlib import nullcontext
 
-from room_view import audience_key
+from service.room_view import audience_key
 
 
 def digest(secret):

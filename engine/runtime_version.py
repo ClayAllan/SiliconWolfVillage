@@ -8,7 +8,11 @@ _SOURCES = {}
 
 def register_source(name, filename):
     text = Path(filename).read_text(encoding="utf-8-sig")
-    _SOURCES[name] = {"sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "text": text}
+    record = {"sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "text": text}
+    _SOURCES[name] = record
+    short_name = name.split(".")[-1]
+    if short_name != name:
+        _SOURCES[short_name] = record
 
 
 def snapshot(engine=None):

@@ -8,9 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
-import config
-from game_engine import GameEngine
-from game_service import GameService
+from engine import config
+from engine.game_engine import GameEngine
+from service.game_service import GameService
 from test_runtime_regressions import MemoryOnlyManager
 
 
@@ -70,7 +70,7 @@ class GameServiceTests(unittest.TestCase):
         self.directory = directory.name
         self.addCleanup(directory.cleanup)
         # 缩短事件间隔，仍通过真实 Condition 和后台线程执行。
-        pacing = patch("game_service.rerun_delay", return_value=0.005)
+        pacing = patch("service.game_service.rerun_delay", return_value=0.005)
         pacing.start()
         self.addCleanup(pacing.stop)
 
@@ -203,7 +203,7 @@ class GameServiceTests(unittest.TestCase):
 
     def test_archive_failure_is_reported_without_losing_terminal_state(self):
         _, service = self.make_service(FiniteEngine, automatic=False)
-        with patch("game_service.archive_game", side_effect=OSError("磁盘不可写")):
+        with patch("service.game_service.archive_game", side_effect=OSError("磁盘不可写")):
             for _ in range(4):
                 service.step()
             snapshot = service.snapshot()

@@ -5,12 +5,12 @@ from pathlib import Path
 import time
 import uuid
 
-from room_registry import get_registry
-from replay_frames import DisplayReplay
-from replay_reader import legacy_public_rows
-from live_feed import schedule_page_refresh
-from feed_ui import scroll_script
-import ui_design as design
+from service.room_registry import get_registry
+from storage.replay_frames import DisplayReplay
+from storage.replay_reader import legacy_public_rows
+from service.live_feed import schedule_page_refresh
+from ui.feed_ui import scroll_script
+from ui import ui_design as design
 
 
 def feed_command(state, key, action):

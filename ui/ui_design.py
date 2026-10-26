@@ -2,8 +2,8 @@
 import math
 from html import escape
 
-import config
-from ui_theme import theme_variables
+from engine import config
+from ui.ui_theme import theme_variables
 
 
 def text(value):
@@ -194,7 +194,7 @@ def stage(players, current=None, selected=1, sheriff=None, engine=None):
 def factions(engine, *, reveal_counts=None):
     counts = reveal_counts if reveal_counts is not None else getattr(engine, "counts", None)
     if counts is None and not getattr(engine, "limited", False):
-        from view_projection import faction_counts
+        from service.view_projection import faction_counts
         counts = faction_counts(engine)
     total = len(engine.players)
     dead = total-len(engine.alive_seats())

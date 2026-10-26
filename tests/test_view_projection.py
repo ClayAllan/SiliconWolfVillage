@@ -1,8 +1,8 @@
 import unittest
 
-import ui_design as design
-from ui_preview import preview_engine
-from view_projection import project_view, faction_counts
+from ui import ui_design as design
+from ui.ui_preview import preview_engine
+from service.view_projection import project_view, faction_counts
 
 
 class ViewProjectionTests(unittest.TestCase):

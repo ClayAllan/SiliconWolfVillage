@@ -14,8 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import config
-from replay_recorder import GameRecorder, SCHEMA_VERSION
+from engine import config
+from storage.replay_recorder import GameRecorder, SCHEMA_VERSION
 
 
 EXPLOSION_RE = re.compile(r"^\s*-?\s*💥\s*(?:狼人自爆|白狼王)(?:[：:\s]|$)")
@@ -387,10 +387,10 @@ def _usage_totals(api_rows: list[dict]) -> dict:
 
 
 def _source_snapshot(engine=None) -> dict:
-    from runtime_version import snapshot
+    from engine.runtime_version import snapshot
     root = Path(__file__).resolve().parent
     try:
-        from ai_agent import SUMMARY_TEMPLATE, SYSTEM_TEMPLATE
+        from agent.ai_agent import SUMMARY_TEMPLATE, SYSTEM_TEMPLATE
     except Exception:
         SUMMARY_TEMPLATE = SYSTEM_TEMPLATE = ""
     return {

@@ -1,7 +1,7 @@
 import unittest
 
-import ui_design as design
-from ui_preview import preview_engine
+from ui import ui_design as design
+from ui.ui_preview import preview_engine
 
 
 class UiDesignTests(unittest.TestCase):
