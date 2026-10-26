@@ -43,6 +43,7 @@ def provider_for(base_url, mode="auto"):
         return mode
     return "deepseek" if urlparse(str(base_url)).hostname == "api.deepseek.com" else "generic"
 
+
 DEFAULT_ALLOWED_MODEL_HOSTS = {"api.deepseek.com", "api.openai.com"}
 
 
