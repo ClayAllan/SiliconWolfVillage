@@ -708,6 +708,15 @@ class GameEngine:
             dead_list = "、".join(f"{seat}号" for seat in pending_seats)
             self._log_judge(f"💾 读档恢复：存档发生在警长竞选期间，已结算并公布此前待结算的夜间死亡：{dead_list}。")
             self._broadcast_event(f"【读档恢复】因从存档的下一夜继续，系统已结算此前待公布的夜间死亡：{dead_list}。")
+            if self.winner:
+                self.phase = "游戏结束"
+                if self.winner == "好人":
+                    self._log_win("🏆 读档结算后，所有狼人已出局，【好人阵营】获胜！")
+                elif self.winner == "情侣":
+                    self._log_win("🏆 读档结算后，【情侣第三方】获胜！")
+                else:
+                    self._log_win("🏆 读档结算后，【狼人阵营】获胜！")
+                self._add_replay(f"\n## 🏁 结果\n**🏆 {self.winner}阵营获胜！（读档恢复结算）**")
         self.pending_night_deaths = {}
         self._active_request_id = None
         self._active_compression_id = None
