@@ -144,7 +144,7 @@ class SpectatorTests(unittest.TestCase):
         self.engine._log_player(1, "第二条记录")
         self.service._publish_display()
         second = replay._row_chain_cache[cache_key]
-        self.assertEqual(second["source_id"], first["source_id"])
+        self.assertIs(second["source"], first["source"])
         self.assertEqual(second["length"], first["length"] + 1)
         self.assertNotEqual(second["tail"], first["tail"])
 
