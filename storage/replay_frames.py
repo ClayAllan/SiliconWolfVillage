@@ -22,6 +22,7 @@ class DisplayReplay:
         self.directory = Path(directory) if directory else None
         self.items = {}
         self.timelines = {k: [] for k in ["public", "omniscient", *(f"seat:{s}" for s in range(1, 13))]}
+        self._cursor_indexes = {key: {} for key in self.timelines}
         self.frames = 0
         self.bytes = 0
         self.issue = ""
@@ -127,7 +128,9 @@ class DisplayReplay:
             frame = {"schema": 1, "game_id": self.game_id, "frame_seq": self.frames + 1, "changes": changes}
             self._append("replay_frames.jsonl", frame)
             for audience, entry in changes.items():
-                self.timelines[audience].append(entry)
+                timeline = self.timelines[audience]
+                timeline.append(entry)
+                self._cursor_indexes[audience][entry["cursor"]] = len(timeline) - 1
             self.frames += 1
         if self.directory:
             manifest = {"replay_schema_version": 1, "game_id": self.game_id,
@@ -148,9 +151,13 @@ class DisplayReplay:
         timeline = self.timelines[audience]
         if not timeline:
             raise ValueError("暂无可读取的展示记录")
-        entry = timeline[-1] if cursor is None else next((r for r in timeline if r["cursor"] == cursor), None)
-        if entry is None:
-            raise ValueError("该视角没有此回放位置")
+        if cursor is None:
+            entry = timeline[-1]
+        else:
+            index = self._cursor_indexes[audience].get(cursor)
+            if index is None:
+                raise ValueError("该视角没有此回放位置")
+            entry = timeline[index]
         result = copy.deepcopy(self.items[entry["ref"]])
         result["public_log"] = self._unpack_rows(result["public_log"])
         result["reasoning_log"] = {s: self._unpack_rows(tail) for s, tail in result["reasoning_log"].items()}
