@@ -1,18 +1,10 @@
 # 🐺 硅基狼村 · Silicon Wolf Village
 
 <p align="center">
-  <a href="https://siliconwolfvillage.streamlit.app/"><img src="https://img.shields.io/badge/%E5%9C%A8%E7%BA%BF%E4%BD%93%E9%AA%8C-%E7%AB%8B%E5%8D%B3%E8%AF%95%E7%8E%A9-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white" alt="在线体验"></a>
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/%E8%BF%90%E8%A1%8C%E7%8E%AF%E5%A2%83-Python%203.11%20%2F%203.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 版本"></a>
-  <a href="https://api-docs.deepseek.com/"><img src="https://img.shields.io/badge/%E6%A8%A1%E5%9E%8B%E6%8E%A5%E5%8F%A3-DeepSeek%20%2F%20OpenAI%20%E5%85%BC%E5%AE%B9-8A2BE2?style=for-the-badge&logo=openai&logoColor=white" alt="大模型接口"></a>
-  <img src="https://img.shields.io/badge/%E6%B5%8B%E8%AF%95%E7%94%A8%E4%BE%8B-159%20%E9%A1%B9-2ea44f?style=for-the-badge" alt="自动化测试用例 159 项">
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/%E7%8E%A9%E5%AE%B6%E8%A7%84%E6%A8%A1-12%20%E4%BA%BA-orange?style=flat-square" alt="玩家规模：12 人">
-  <img src="https://img.shields.io/badge/%E9%98%B5%E8%90%A5%E8%AE%BE%E7%BD%AE-%E7%8B%BC%E4%BA%BA%20%2F%20%E5%A5%BD%E4%BA%BA%20%2F%20%E7%AC%AC%E4%B8%89%E6%96%B9-critical?style=flat-square" alt="阵营：狼人、好人、第三方">
-  <img src="https://img.shields.io/badge/AI%20%E5%86%B3%E7%AD%96-%E6%8E%A8%E7%90%86%E4%B8%8E%E8%A1%8C%E5%8A%A8%E8%AE%B0%E5%BD%95-blue?style=flat-square" alt="AI 决策：推理与行动记录">
-  <img src="https://img.shields.io/badge/%E5%A4%8D%E7%9B%98%E8%83%BD%E5%8A%9B-%E4%BA%8B%E4%BB%B6%E5%8F%AF%E8%BF%BD%E6%BA%AF-informational?style=flat-square" alt="复盘能力：事件可追溯">
-  <img src="https://img.shields.io/badge/%E7%95%8C%E9%9D%A2%E4%B8%BB%E9%A2%98-%E6%B5%85%E8%89%B2%20%2F%20%E6%B7%B1%E8%89%B2%20%2F%20%E8%B7%9F%E9%9A%8F%E7%B3%BB%E7%BB%9F-9cf?style=flat-square" alt="界面主题：浅色、深色、跟随系统">
+  <a href="https://siliconwolfvillage.streamlit.app/"><img src="https://img.shields.io/badge/%E5%9C%A8%E7%BA%BF%E4%BD%93%E9%AA%8C-%E7%AB%8B%E5%8D%B3%E8%AF%95%E7%8E%A9-2DA44E" alt="在线体验：立即试玩"></a>
+  <img src="https://img.shields.io/badge/%E8%BF%90%E8%A1%8C%E7%8E%AF%E5%A2%83-Python%203.11%20%2F%203.12-3776AB" alt="运行环境：Python 3.11 或 3.12">
+  <img src="https://img.shields.io/badge/%E6%A8%A1%E5%9E%8B%E6%8E%A5%E5%8F%A3-OpenAI%20%E5%85%BC%E5%AE%B9-6F42C1" alt="模型接口：兼容 OpenAI API 的服务">
+  <img src="https://img.shields.io/badge/%E7%A6%BB%E7%BA%BF%E5%9B%9E%E5%BD%92-139%20%E9%A1%B9%E9%80%9A%E8%BF%87%EF%BC%882026-10-25%EF%BC%89-2DA44E" alt="2026 年 10 月 25 日离线回归测试 139 项通过">
 </p>
 
 > 本地启动说明（2026-10-25）：本目录为新版，直接运行 `python -m streamlit run app.py` 默认使用 http://127.0.0.1:8503/。 两个批处理均采用ASCII正文和Windows换行，并检查8503占用；不会停止其他项目。DeepEcho继续使用8501。批处理附加 `--check` 只检查路径和端口，不启动网页。
