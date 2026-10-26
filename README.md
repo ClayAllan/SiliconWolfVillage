@@ -4,10 +4,10 @@
   <a href="https://siliconwolfvillage.streamlit.app/"><img src="https://img.shields.io/badge/%E5%9C%A8%E7%BA%BF%E4%BD%93%E9%AA%8C-%E7%AB%8B%E5%8D%B3%E8%AF%95%E7%8E%A9-2DA44E" alt="在线体验：立即试玩"></a>
   <img src="https://img.shields.io/badge/%E8%BF%90%E8%A1%8C%E7%8E%AF%E5%A2%83-Python%203.11%20%2F%203.12-3776AB" alt="运行环境：Python 3.11 或 3.12">
   <img src="https://img.shields.io/badge/%E6%A8%A1%E5%9E%8B%E6%8E%A5%E5%8F%A3-OpenAI%20API-6F42C1.svg?logo=openai&logoColor=white" alt="模型接口：OpenAI API 兼容服务">
-  <img src="https://img.shields.io/badge/%E7%A6%BB%E7%BA%BF%E5%9B%9E%E5%BD%92-159%20%E9%A1%B9%E9%80%9A%E8%BF%87%EF%BC%882026%20%E5%B9%B4%2010%20%E6%9C%88%2026%20%E6%97%A5%EF%BC%89-2DA44E" alt="2026 年 10 月 26 日离线回归测试 159 项通过">
+  <img src="https://img.shields.io/badge/%E5%9B%9E%E5%BD%92%E5%9F%BA%E7%BA%BF-159%20%E9%A1%B9%EF%BC%882026--10--26%EF%BC%89-6c757d.svg" alt="历史离线回归基线：159 项（2026-10-26），不代表当前分支已重新验证">
 </p>
 
-> 本地启动说明（2026-10-25）：本目录为新版，直接运行 `python -m streamlit run app.py` 默认使用 http://127.0.0.1:8503/。 两个批处理均采用ASCII正文和Windows换行，并检查8503占用；不会停止其他项目。DeepEcho继续使用8501。批处理附加 `--check` 只检查路径和端口，不启动网页。
+> 本地启动说明（2026-10-27）：`启动硅基狼村.bat` 从脚本所在目录运行，默认使用 `127.0.0.1:8503`；当前仓库只提供这一个启动脚本。直接运行下方命令也会显式指定 8503。`--check` 只检查项目路径和端口，不启动网页，也不会停止其他项目。Streamlit Community Cloud 使用平台管理的端口。
 
 **十二个 AI 同桌玩狼人杀，你在上帝视角看它们推理、伪装、投票和翻盘。**
 
@@ -19,10 +19,10 @@
 
 ```sh
 python -m pip install -r requirements.txt
-python -m streamlit run app.py
+python -m streamlit run app.py --server.address 127.0.0.1 --server.port 8503
 ```
 
-在侧边栏填写 Key、Base URL 和双方模型，先测试连接，再开始对局。第三方 OpenAI 兼容服务需要填写实际可用的模型名。
+在侧边栏填写 Key、Base URL 和双方模型，先测试连接，再开始对局。公共托管版默认只允许 HTTPS 的 `api.deepseek.com` 和 `api.openai.com`；自定义公网服务必须由部署者将精确域名加入 `SWV_ALLOWED_MODEL_HOSTS`（逗号分隔）。本地或私有模型地址仅限可信自托管环境显式设置 `SWV_ALLOW_PRIVATE_MODEL_URLS=1`，绝不能在公共部署中开启。每个 Python 进程默认最多同时执行 24 个模型 HTTP 请求，可通过 `SWV_MAX_CONCURRENT_MODEL_REQUESTS` 调整。
 
 可部署在自己的云服务器，或通过 [Streamlit Community Cloud](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app) 选择仓库、分支及入口 `app.py`。在云服务器上向外提供服务时，由反向代理接入 Streamlit，并支持 WebSocket；目前每局只在创建它的 Python 进程中执行。
 
