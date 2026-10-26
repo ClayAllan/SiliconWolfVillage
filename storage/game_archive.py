@@ -12,7 +12,7 @@ import uuid
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from engine import config
 from storage.replay_recorder import GameRecorder, SCHEMA_VERSION
@@ -87,10 +87,21 @@ def _usage_values(usage: dict | None) -> dict:
 
 
 def _sanitize_base_url(value: str) -> str:
+    """Keep endpoint diagnostics without persisting URL userinfo, query or fragment."""
     try:
-        parsed = urlsplit(value or "")
-        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
-    except Exception:
+        parsed = urlsplit(str(value or ""))
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname
+        if scheme not in {"http", "https"} or not hostname:
+            return ""
+        host = hostname.lower()
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        port = parsed.port
+        if port is not None:
+            host = f"{host}:{port}"
+        return urlunsplit((scheme, host, parsed.path.rstrip("/"), "", ""))
+    except (TypeError, ValueError):
         return ""
 
 
