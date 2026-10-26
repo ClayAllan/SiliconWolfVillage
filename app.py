@@ -309,7 +309,12 @@ with st.sidebar:
     api_key = st.text_input("DeepSeek API Key", value=default_key, type="password",
                             help="填写你自己的 API Key；请求由托管服务器转发给所选模型服务。")
     with st.expander("模型与高级设置", expanded=False):
-        base_url = st.text_input("Base URL", value=config.BASE_URL)
+        base_url = st.text_input(
+            "Base URL", value=config.BASE_URL,
+            help=("公共托管版仅允许 HTTPS 且域名在部署者允许列表中的模型服务。"
+                  "自定义公网域名需由部署者配置 SWV_ALLOWED_MODEL_HOSTS；"
+                  "本地/私有模型地址仅限可信自托管环境显式开启 SWV_ALLOW_PRIVATE_MODEL_URLS=1。"),
+        )
         _providers = {"自动识别（仅官方地址启用专用参数）": "auto",
                       "通用 OpenAI 兼容接口": "generic", "DeepSeek 兼容接口（明确指定）": "deepseek"}
         provider_mode = _providers[st.selectbox("接口类型", list(_providers), key="provider_mode")]
@@ -598,10 +603,13 @@ with st.container(key="playback"):
         if not api_key or api_key.startswith("sk-请"):
             st.error("请展开左上角侧栏，填写自己的 API Key 后开始；也可先查看零 API 示例。")
         else:
-            start_game(api_key, base_url, good_model, wolf_model, temperature, agent_timeout, board,
-                        automatic=auto, delay=delay, turbo=is_turbo,
-                        provider_mode=provider_mode, thinking=thinking, reasoning_effort=reasoning_effort)
-            st.rerun()
+            try:
+                start_game(api_key, base_url, good_model, wolf_model, temperature, agent_timeout, board,
+                           automatic=auto, delay=delay, turbo=is_turbo,
+                           provider_mode=provider_mode, thinking=thinking, reasoning_effort=reasoning_effort)
+                st.rerun()
+            except (ValueError, RuntimeError) as error:
+                st.error(str(error))
     pause_label = "⏸️ 暂停" if ss.running else "▶️ 继续"
     if pause_col.button(pause_label, use_container_width=True, disabled=live_engine is None or ss.done):
         if ss.running:
