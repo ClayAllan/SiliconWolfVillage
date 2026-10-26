@@ -174,7 +174,7 @@ class AppIntegrationTests(unittest.TestCase):
         from engine import config
 
         def make_engine(count, old=False):
-            manager = AgentManager(api_key="offline", base_url="https://example.invalid")
+            manager = AgentManager(api_key="offline", base_url="https://api.deepseek.com")
             self.addCleanup(manager.shutdown)
             engine = GameEngine(manager)
             engine.setup(config.GAME_BOARDS[config.DEFAULT_BOARD])
