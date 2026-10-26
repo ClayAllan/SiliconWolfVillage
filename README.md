@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://siliconwolfvillage.streamlit.app/"><img src="https://img.shields.io/badge/%E5%9C%A8%E7%BA%BF%E4%BD%93%E9%AA%8C-%E7%AB%8B%E5%8D%B3%E8%AF%95%E7%8E%A9-2DA44E" alt="在线体验：立即试玩"></a>
   <img src="https://img.shields.io/badge/%E8%BF%90%E8%A1%8C%E7%8E%AF%E5%A2%83-Python%203.11%20%2F%203.12-3776AB" alt="运行环境：Python 3.11 或 3.12">
-  <img src="https://img.shields.io/badge/%E6%A8%A1%E5%9E%8B%E6%8E%A5%E5%8F%A3-OpenAI%20API-6F42C1.svg?logo=openai&logoColor=white" alt="模型接口：OpenAI API 兼容服务">
+  <img src="https://img.shields.io/badge/%E6%A8%A1%E5%9E%8B%E6%8E%A5%E5%8F%A3-OpenAI%20API-6F42C1.svg" alt="模型接口：OpenAI API 兼容服务">
   <img src="https://img.shields.io/badge/%E5%9B%9E%E5%BD%92%E5%9F%BA%E7%BA%BF-159%20%E9%A1%B9%EF%BC%882026--10--26%EF%BC%89-6c757d.svg" alt="历史离线回归基线：159 项（2026-10-26），不代表当前分支已重新验证">
 </p>
 
