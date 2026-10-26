@@ -36,7 +36,7 @@ class RecorderTests(unittest.TestCase):
     def test_recording_before_setup_preserves_prompts_without_api_key(self):
         with tempfile.TemporaryDirectory() as directory:
             manager = AgentManager(
-                api_key="super-secret-key", base_url="https://example.invalid/v1",
+                api_key="super-secret-key", base_url="https://api.deepseek.com/v1",
                 good_model="good", wolf_model="wolf", fallback_model="",
                 max_retries=1, agent_timeout=1,
             )
