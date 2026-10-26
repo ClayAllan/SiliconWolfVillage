@@ -1,4 +1,19 @@
-# 硅基狼村 · Silicon Wolf Village
+# 🐺 硅基狼村 · Silicon Wolf Village
+
+<p align="center">
+  <a href="https://siliconwolfvillage.streamlit.app/"><img src="https://img.shields.io/badge/Streamlit%20Cloud-Live%20Demo-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white" alt="Streamlit Cloud"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11%20%7C%203.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python Version"></a>
+  <a href="https://platform.openai.com/"><img src="https://img.shields.io/badge/LLM-DeepSeek%20%7C%20OpenAI-8A2BE2?style=for-the-badge&logo=openai&logoColor=white" alt="LLM Engine"></a>
+  <img src="https://img.shields.io/badge/Tests-159%20Passed-2ea44f?style=for-the-badge&logo=githubactions&logoColor=white" alt="Tests">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Players-12%20Full%20Roster-orange?style=flat-square" alt="Players">
+  <img src="https://img.shields.io/badge/Factions-Wolf%20%7C%20Good%20%7C%20Third%20Party-critical?style=flat-square" alt="Factions">
+  <img src="https://img.shields.io/badge/Reasoning-Full%20Chain--of--Thought-blue?style=flat-square" alt="Reasoning">
+  <img src="https://img.shields.io/badge/Replay-Deterministic%20Audit-informational?style=flat-square" alt="Replay">
+  <img src="https://img.shields.io/badge/UI-Adaptive%20Light%20%2F%20Dark-9cf?style=flat-square" alt="UI Theme">
+</p>
 
 > 本地启动说明（2026-10-25）：本目录为新版，直接运行 `python -m streamlit run app.py` 默认使用 http://127.0.0.1:8503/。 两个批处理均采用ASCII正文和Windows换行，并检查8503占用；不会停止其他项目。DeepEcho继续使用8501。批处理附加 `--check` 只检查路径和端口，不启动网页。
 

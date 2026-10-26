@@ -33,6 +33,6 @@ backgroundColor = "#151e2b"
 secondaryBackgroundColor = "#1c293b"
 textColor = "#edf2f8"
 
-[server]
-address = "127.0.0.1"
-port = 8503
+[client]
+showErrorDetails = true
+toolbarMode = "viewer"
