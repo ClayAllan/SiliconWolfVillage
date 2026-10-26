@@ -4,7 +4,6 @@ import hashlib
 import secrets
 import threading
 import time
-from contextlib import nullcontext
 
 from service.room_view import audience_key
 
@@ -116,26 +115,38 @@ class RoomRegistry:
             raise PermissionError("观战权限已撤销或过期")
         return grant["audience"]
 
-    def read(self, room_id, token, browser, cursor=None):
+    def read(self, room_id, token, browser, cursor=None, *, timeline_from=None, include_view=True):
         room = self._room(room_id)
         with room.lock:
             audience = self._audience(room, token, browser)
-            with room.service._condition if room.service else nullcontext():
-                view = room.replay.read(audience, cursor)
-                timeline = room.replay.timeline(audience)
-                return {"view": view, "timeline": timeline, "issue": room.replay.issue,
-                        "running": bool(room.service and room.service._running),
-                        "done": bool(room.service is None or room.service._done)}
+            service, replay = room.service, room.replay
+        # Replay owns its short-lived data lock. Do not hold the game Condition while
+        # expanding historical rows; a spectator read must not stall game advancement.
+        packet = replay.read_packet(
+            audience, cursor, timeline_from=timeline_from, include_view=include_view
+        )
+        if service:
+            with service._condition:
+                running, done = bool(service._running), bool(service._done)
+        else:
+            running, done = False, True
+        return {**packet, "running": running, "done": done}
 
-    def owner_read(self, room_id, owner, audience="omniscient", cursor=None):
+    def owner_read(self, room_id, owner, audience="omniscient", cursor=None, *,
+                   timeline_from=None, include_view=True):
         room = self._room(room_id)
         with room.lock:
             self._owner(room, owner)
-            with room.service._condition if room.service else nullcontext():
-                return {"view": room.replay.read(audience, cursor), "timeline": room.replay.timeline(audience),
-                        "issue": room.replay.issue, "running": bool(room.service and room.service._running),
-                        "done": bool(room.service is None or room.service._done),
-                        "revision": room.service.revision if room.service else None}
+            service, replay = room.service, room.replay
+        packet = replay.read_packet(
+            audience, cursor, timeline_from=timeline_from, include_view=include_view
+        )
+        if service:
+            with service._condition:
+                running, done, revision = bool(service._running), bool(service._done), service.revision
+        else:
+            running, done, revision = False, True, None
+        return {**packet, "running": running, "done": done, "revision": revision}
 
     def control(self, room_id, owner, command_id, expected_revision, command):
         room = self._room(room_id)

@@ -1,7 +1,9 @@
 """模型能力、输出预算和响应协议；不发请求、不访问凭证。"""
+import ipaddress
 import json
+import os
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 from engine import config
 
@@ -40,6 +42,68 @@ def provider_for(base_url, mode="auto"):
     if mode != "auto":
         return mode
     return "deepseek" if urlparse(str(base_url)).hostname == "api.deepseek.com" else "generic"
+
+
+DEFAULT_ALLOWED_MODEL_HOSTS = {"api.deepseek.com", "api.openai.com"}
+
+
+def _is_private_or_local_host(host: str) -> bool:
+    host = str(host or "").strip().lower().rstrip(".")
+    if host == "localhost" or host.endswith((".localhost", ".local", ".lan", ".internal")):
+        return True
+    try:
+        return not ipaddress.ip_address(host).is_global
+    except ValueError:
+        return False
+
+
+def validate_base_url(value: str) -> str:
+    """Validate a model endpoint before the SDK makes any server-side request.
+
+    Public deployments allow only HTTPS endpoints explicitly trusted by the
+    operator. Private/local endpoints require a deliberate self-hosted opt-in.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("Base URL 不能为空")
+    value = value.strip()
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError("Base URL 不允许包含控制字符")
+    if len(value) > 2048:
+        raise ValueError("Base URL 过长")
+    try:
+        parsed = urlsplit(value)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Base URL 格式无效") from exc
+    if parsed.scheme.lower() not in {"https", "http"} or not host or not parsed.netloc:
+        raise ValueError("Base URL 必须是包含主机名的 HTTP(S) 地址")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("Base URL 不允许嵌入用户名或密码")
+    if parsed.query or parsed.fragment:
+        raise ValueError("Base URL 不允许包含查询参数或片段")
+    allow_private = os.getenv("SWV_ALLOW_PRIVATE_MODEL_URLS", "").strip().lower() in {"1", "true", "yes"}
+    configured = {
+        item.strip().lower().rstrip(".")
+        for item in os.getenv("SWV_ALLOWED_MODEL_HOSTS", "").split(",")
+        if item.strip()
+    }
+    allowed_hosts = DEFAULT_ALLOWED_MODEL_HOSTS | configured
+    if host in allowed_hosts:
+        if parsed.scheme.lower() != "https":
+            raise ValueError("允许列表中的模型服务必须使用 HTTPS")
+        if port not in (None, 443):
+            raise ValueError("公共模型服务只允许使用 HTTPS 默认端口 443")
+    elif allow_private and _is_private_or_local_host(host):
+        # Explicit opt-in is intended only for a trusted local/self-hosted deployment.
+        pass
+    else:
+        raise ValueError(
+            "该模型服务域名不在允许列表中。自定义公网服务请由部署者配置 "
+            "SWV_ALLOWED_MODEL_HOSTS；本地/私有地址仅可在可信自托管环境显式启用 "
+            "SWV_ALLOW_PRIVATE_MODEL_URLS=1。"
+        )
+    return value.rstrip("/")
 
 
 def output_budget(kind, *, repair=False):

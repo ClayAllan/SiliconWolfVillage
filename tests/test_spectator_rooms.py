@@ -114,6 +114,40 @@ class SpectatorTests(unittest.TestCase):
         packets[0]["view"]["players"]["1"]["role"] = "tampered"
         self.assertEqual(packets[1]["view"]["players"]["1"]["role"], "未知")
 
+    def test_read_packet_returns_only_new_timeline_entries_without_view_decoding(self):
+        _, token = self.join()
+        first = self.registry.read(
+            self.room, token, "browser", timeline_from=0, include_view=False
+        )
+        self.assertIsNone(first["view"])
+        self.assertEqual(len(first["timeline"]), first["timeline_revision"])
+        known = first["timeline_revision"]
+
+        self.engine.day = 1
+        self.engine.phase = "第1天"
+        self.engine._log_player(1, "增量时间轴测试")
+        self.service._publish_display()
+        update = self.registry.read(
+            self.room, token, "browser", timeline_from=known, include_view=False
+        )
+        self.assertIsNone(update["view"])
+        self.assertEqual(update["timeline_revision"], known + 1)
+        self.assertEqual(len(update["timeline"]), 1)
+        self.assertEqual(update["timeline"][0]["phase"], self.engine.phase)
+
+    def test_display_replay_reuses_existing_log_prefix(self):
+        replay = self.service.display_replay
+        self.engine._log_player(1, "第一条记录")
+        self.service._publish_display()
+        cache_key = ("public", "public")
+        first = dict(replay._row_chain_cache[cache_key])
+        self.engine._log_player(1, "第二条记录")
+        self.service._publish_display()
+        second = replay._row_chain_cache[cache_key]
+        self.assertIs(second["source"], first["source"])
+        self.assertEqual(second["length"], first["length"] + 1)
+        self.assertNotEqual(second["tail"], first["tail"])
+
     def test_old_cursor_is_stable_after_terminal_event(self):
         _, token = self.join()
         first = self.registry.read(self.room, token, "browser")["view"]["cursor"]
@@ -197,6 +231,25 @@ class SpectatorTests(unittest.TestCase):
         state.pop("published_alive")
         self.engine.load_state(state)
         self.assertTrue(all(p["alive"] is None for p in project_room(self.engine)["players"].values()))
+
+    def test_resume_settles_and_publishes_pending_night_deaths(self):
+        seat = next(s for s in self.engine.players if s not in self.engine.wolves)
+        state = self.engine.export_state()
+        state["phase"] = "第1天"
+        state["day"] = 1
+        state["players"][str(seat)]["alive"] = True
+        state["published_alive"][str(seat)] = True
+        state["pending_night_deaths"] = {str(seat): "wolf_kill"}
+
+        restored = GameEngine(ServiceManager())
+        restored.setup(config.GAME_BOARDS[config.DEFAULT_BOARD])
+        restored.load_state(state)
+
+        self.assertFalse(restored.players[seat]["alive"])
+        self.assertIs(restored.published_alive[seat], False)
+        self.assertIn("读档恢复", json.dumps(restored.public_log, ensure_ascii=False))
+        self.assertIs(project_room(restored)["players"][str(seat)]["alive"], False)
+        self.assertEqual(restored.pending_night_deaths, {})
 
     def test_lovers_get_relation_not_partner_identity(self):
         seats = [s for s in self.engine.players if s not in self.engine.wolves][:2]

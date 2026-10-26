@@ -33,6 +33,11 @@ backgroundColor = "#151e2b"
 secondaryBackgroundColor = "#1c293b"
 textColor = "#edf2f8"
 
+[server]
+# The legacy archive parser accepts at most 32 MiB; reject larger uploads before buffering.
+maxUploadSize = 32
+
 [client]
-showErrorDetails = true
+# Do not expose tracebacks or internal paths to public visitors.
+showErrorDetails = false
 toolbarMode = "viewer"

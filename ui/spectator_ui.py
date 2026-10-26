@@ -7,7 +7,7 @@ import uuid
 
 from service.room_registry import get_registry
 from storage.replay_frames import DisplayReplay
-from storage.replay_reader import legacy_public_rows
+from storage.replay_reader import legacy_public_rows, MAX_LEGACY_ARCHIVE_BYTES
 from service.live_feed import schedule_page_refresh
 from ui.feed_ui import scroll_script
 from ui import ui_design as design
@@ -35,16 +35,42 @@ def render_board(st, view):
 
 
 def render_player(st, read, key):
-    """read(cursor) always revalidates authorization, including exports."""
+    """read(cursor, ...) always revalidates authorization, including exports."""
     ss = st.session_state
-    latest = read(None)
-    timeline = latest["timeline"]
+    timeline_key, length_key, positions_key = key + "_timeline", key + "_timeline_length", key + "_positions"
+
+    def fetch_packet(cursor, *, include_view=True):
+        old_length = int(ss.get(length_key, 0) or 0)
+        packet = read(cursor, timeline_from=old_length, include_view=include_view)
+        revision = int(packet.get("timeline_revision", 0) or 0)
+        cached = ss.get(timeline_key)
+        if cached is None or revision < old_length:
+            timeline = list(packet.get("timeline") or [])
+            start_index = 0
+        elif packet.get("timeline"):
+            timeline = list(cached) + list(packet["timeline"])
+            start_index = len(cached)
+        else:
+            timeline = cached
+            start_index = len(timeline)
+        if cached is None or revision < old_length or packet.get("timeline"):
+            ss[timeline_key] = timeline
+            ss[length_key] = revision
+            positions = dict(ss.get(positions_key, {})) if start_index else {}
+            for i in range(start_index, len(timeline)):
+                positions[timeline[i]["cursor"]] = i
+            ss[positions_key] = positions
+        else:
+            positions = ss.get(positions_key, {})
+        packet["timeline_revision"] = revision
+        return packet, ss.get(timeline_key, []), ss.get(positions_key, {})
+
+    latest, timeline, positions = fetch_packet(None, include_view=False)
     if not timeline:
         st.info("尚无展示记录")
         return False
     cursor_key, playing_key, tick_key = key + "_cursor", key + "_playing", key + "_tick"
     cursor = ss.get(cursor_key)
-    positions = {r["cursor"]: i for i, r in enumerate(timeline)}
     if cursor is not None and cursor not in positions:
         cursor = ss[cursor_key] = None
         ss[playing_key] = False
@@ -66,11 +92,12 @@ def render_player(st, read, key):
         ss[cursor_key], ss[playing_key] = None, False
         st.rerun()
     speed = st.select_slider("回放速度", options=[0.5, 1.0, 2.0], value=1.0, key=key + "_speed")
-    # Only visible frames are listed. The live engine is never advanced here.
-    choice = st.selectbox("按天 / 阶段跳转", options=list(range(len(timeline))),
-                          format_func=lambda i: f"{i + 1} · {timeline[i]['phase']}", key=key + "_jump")
+    # Numeric jumping avoids building a huge selectbox containing every frame.
+    choice = st.number_input("跳转到事件序号", min_value=1, max_value=len(timeline),
+                             value=max(1, min(len(timeline), index + 1)), step=1,
+                             key=key + "_jump_position")
     if st.button("跳到选定事件", key=key + "_jump_button"):
-        ss[cursor_key], ss[playing_key] = timeline[choice]["cursor"], False
+        ss[cursor_key], ss[playing_key] = timeline[int(choice) - 1]["cursor"], False
         st.rerun()
     if ss.get(playing_key) and time.monotonic() - ss.get(tick_key, 0) >= 1.5 / speed:
         index = min(index + 1, len(timeline) - 1)
@@ -78,7 +105,9 @@ def render_player(st, read, key):
         ss[tick_key] = time.monotonic()
         if index == len(timeline) - 1:
             ss[playing_key] = False
-    packet = latest if cursor is None else read(cursor)
+    packet, timeline, positions = fetch_packet(cursor)
+    if cursor is not None:
+        index = positions.get(cursor, index)
     view = packet["view"]
     st.caption("直播 · 最新可见画面" if cursor is None else f"正在回看 · {index + 1}/{len(timeline)} · 后方还有 {len(timeline) - index - 1} 个可见更新")
     if packet["issue"]:
@@ -123,18 +152,17 @@ def render_player(st, read, key):
                 st.markdown(f"**{seat} 号**")
                 st.markdown(design.reasoning(entries[-1]), unsafe_allow_html=True)
     if st.button("准备当前画面导出", key=key + "_export"):
-        safe_view = read(cursor)["view"]
+        safe_view = fetch_packet(cursor)[0]["view"]
         st.download_button("下载已授权画面 JSON", json.dumps(safe_view, ensure_ascii=False, indent=2),
                            file_name="观战画面.json", mime="application/json", key=key + "_download")
     speeches = [r for r in view["public_log"] if r["kind"] == "player"]
     if speeches and st.button("逐字播放最近发言", key=key + "_animate"):
         # Completed and validated speech only; no model streaming or API calls.
-        fresh = read(cursor)["view"]
+        fresh = fetch_packet(cursor)[0]["view"]
         speech = next(r["text"] for r in reversed(fresh["public_log"]) if r["kind"] == "player")
         st.caption("已完成发言的播放效果；可关闭此区，不影响对局。")
         st.write_stream((speech[i:i + 8] for i in range(0, len(speech), 8)))
     return bool(ss.get(playing_key))
-
 
 def spectator_entry(st, room_id):
     registry = get_registry()
@@ -184,9 +212,9 @@ def spectator_entry(st, room_id):
                 if col.button(label, disabled=current["done"], key="owner_control_" + command):
                     registry.control(room_id, token, uuid.uuid4().hex, current["revision"], command)
                     st.rerun()
-            read = lambda cursor: registry.owner_read(room_id, token, cursor=cursor)
+            read = lambda cursor, **options: registry.owner_read(room_id, token, cursor=cursor, **options)
         else:
-            read = lambda cursor: registry.read(room_id, token, ss.spectator_browser, cursor)
+            read = lambda cursor, **options: registry.read(room_id, token, ss.spectator_browser, cursor, **options)
         playing = render_player(st, read,
                                 "viewer_" + hashlib.sha256(token.encode()).hexdigest()[:12])
     except (PermissionError, ValueError, RuntimeError):
@@ -233,7 +261,7 @@ def owner_panel(st, replay_root):
                         registry.revoke(room_id, owner, grant["id"])
                         st.rerun()
                 if st.checkbox("打开独立回放画面", key="owner_replay_open"):
-                    playing = render_player(st, lambda cursor: registry.owner_read(room_id, owner, cursor=cursor), "owner_" + room_id)
+                    playing = render_player(st, lambda cursor, **options: registry.owner_read(room_id, owner, cursor=cursor, **options), "owner_" + room_id)
                 if st.button("释放已结束的观战房间"):
                     registry.release(room_id, owner)
                     receipts.pop(room_id, None)
@@ -257,13 +285,17 @@ def owner_panel(st, replay_root):
                     st.error("无法读取该展示档案，请检查记录是否完整。")
         upload = st.file_uploader("只读浏览旧归档（final_state.json 或 events.jsonl）", type=["json", "jsonl"])
         if upload is not None:
-            try:
-                data = legacy_public_rows(upload.getvalue())
-                st.caption(data["issue"])
-                if data["rows"]:
-                    pos = st.slider("旧档事件位置", 1, len(data["rows"]), 1) if len(data["rows"]) > 1 else 1
-                    for row in data["rows"][max(0, pos - 90):pos]:
-                        st.text(f"{row['phase']} · {row['seat'] or '法官'}：{row['text']}")
-            except (ValueError, UnicodeError):
-                st.error("文件不是可读取的旧归档。")
+            size = getattr(upload, "size", None)
+            if isinstance(size, int) and size > MAX_LEGACY_ARCHIVE_BYTES:
+                st.error("旧归档超过 32 MiB 上限，请先在本地压缩或拆分文件。")
+            else:
+                try:
+                    data = legacy_public_rows(upload.getvalue())
+                    st.caption(data["issue"])
+                    if data["rows"]:
+                        pos = st.slider("旧档事件位置", 1, len(data["rows"]), 1) if len(data["rows"]) > 1 else 1
+                        for row in data["rows"][max(0, pos - 90):pos]:
+                            st.text(f"${row['phase']} · ${row['seat'] or '法官'}：${row['text']}")
+                except (ValueError, UnicodeError):
+                    st.error("文件不是可读取的旧归档。")
     return playing
