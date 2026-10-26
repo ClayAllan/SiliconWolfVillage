@@ -198,6 +198,25 @@ class SpectatorTests(unittest.TestCase):
         self.engine.load_state(state)
         self.assertTrue(all(p["alive"] is None for p in project_room(self.engine)["players"].values()))
 
+    def test_resume_settles_and_publishes_pending_night_deaths(self):
+        seat = next(s for s in self.engine.players if s not in self.engine.wolves)
+        state = self.engine.export_state()
+        state["phase"] = "第1天"
+        state["day"] = 1
+        state["players"][str(seat)]["alive"] = True
+        state["published_alive"][str(seat)] = True
+        state["pending_night_deaths"] = {str(seat): "wolf_kill"}
+
+        restored = GameEngine(ServiceManager())
+        restored.setup(config.GAME_BOARDS[config.DEFAULT_BOARD])
+        restored.load_state(state)
+
+        self.assertFalse(restored.players[seat]["alive"])
+        self.assertIs(restored.published_alive[seat], False)
+        self.assertIn("读档恢复", json.dumps(restored.public_log, ensure_ascii=False))
+        self.assertIs(project_room(restored)["players"][str(seat)]["alive"], False)
+        self.assertEqual(restored.pending_night_deaths, {})
+
     def test_lovers_get_relation_not_partner_identity(self):
         seats = [s for s in self.engine.players if s not in self.engine.wolves][:2]
         self.engine.lovers = tuple(seats)
