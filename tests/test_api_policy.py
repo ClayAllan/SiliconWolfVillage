@@ -142,6 +142,10 @@ class PolicyTests(unittest.TestCase):
                 with self.subTest(unsafe=unsafe), self.assertRaises(ValueError):
                     validate_base_url(unsafe)
 
+    def test_agent_manager_rejects_unsafe_base_url_before_creating_client(self):
+        with self.assertRaises(ValueError):
+            AgentManager(api_key="never-sent", base_url="http://127.0.0.1:11434/v1")
+
     def test_custom_and_private_endpoints_need_explicit_self_hosted_configuration(self):
         with patch.dict("os.environ", {"SWV_ALLOWED_MODEL_HOSTS": "example.invalid"}):
             self.assertEqual(validate_base_url("https://example.invalid/v1"), "https://example.invalid/v1")
