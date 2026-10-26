@@ -2,9 +2,12 @@
 import json
 
 
+MAX_LEGACY_ARCHIVE_BYTES = 32 * 1024 * 1024
+
+
 def legacy_public_rows(raw):
-    if len(raw) > 32 * 1024 * 1024:
-        raise ValueError("旧档超过 32 MB")
+    if len(raw) > MAX_LEGACY_ARCHIVE_BYTES:
+        raise ValueError("旧档超过 32 MiB")
     text = raw.decode("utf-8-sig")
     issue = "旧档仅支持公开事件浏览；历史身份、技能和棋盘状态未重建。"
     try:
