@@ -7,7 +7,7 @@ import uuid
 
 from service.room_registry import get_registry
 from storage.replay_frames import DisplayReplay
-from storage.replay_reader import legacy_public_rows
+from storage.replay_reader import legacy_public_rows, MAX_LEGACY_ARCHIVE_BYTES
 from service.live_feed import schedule_page_refresh
 from ui.feed_ui import scroll_script
 from ui import ui_design as design
@@ -285,13 +285,17 @@ def owner_panel(st, replay_root):
                     st.error("无法读取该展示档案，请检查记录是否完整。")
         upload = st.file_uploader("只读浏览旧归档（final_state.json 或 events.jsonl）", type=["json", "jsonl"])
         if upload is not None:
-            try:
-                data = legacy_public_rows(upload.getvalue())
-                st.caption(data["issue"])
-                if data["rows"]:
-                    pos = st.slider("旧档事件位置", 1, len(data["rows"]), 1) if len(data["rows"]) > 1 else 1
-                    for row in data["rows"][max(0, pos - 90):pos]:
-                        st.text(f"{row['phase']} · {row['seat'] or '法官'}：{row['text']}")
-            except (ValueError, UnicodeError):
-                st.error("文件不是可读取的旧归档。")
+            size = getattr(upload, "size", None)
+            if isinstance(size, int) and size > MAX_LEGACY_ARCHIVE_BYTES:
+                st.error("旧归档超过 32 MiB 上限，请先在本地压缩或拆分文件。")
+            else:
+                try:
+                    data = legacy_public_rows(upload.getvalue())
+                    st.caption(data["issue"])
+                    if data["rows"]:
+                        pos = st.slider("旧档事件位置", 1, len(data["rows"]), 1) if len(data["rows"]) > 1 else 1
+                        for row in data["rows"][max(0, pos - 90):pos]:
+                            st.text(f"${row['phase']} · ${row['seat'] or '法官'}：${row['text']}")
+                except (ValueError, UnicodeError):
+                    st.error("文件不是可读取的旧归档。")
     return playing
