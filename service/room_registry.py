@@ -4,7 +4,6 @@ import hashlib
 import secrets
 import threading
 import time
-from contextlib import nullcontext
 
 from service.room_view import audience_key
 
