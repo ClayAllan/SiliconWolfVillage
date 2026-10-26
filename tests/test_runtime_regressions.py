@@ -64,7 +64,7 @@ class AsyncAgentTests(unittest.TestCase):
     def make_manager(self):
         manager = AgentManager(
             api_key="test-key",
-            base_url="https://example.invalid/v1",
+            base_url="https://api.deepseek.com/v1",
             good_model="test-model",
             wolf_model="test-model",
             fallback_model="",
@@ -510,7 +510,7 @@ class EngineRegressionTests(unittest.TestCase):
 class CircuitBreakerTests(unittest.TestCase):
     def test_three_failed_requests_trip_breaker(self):
         manager = AgentManager(
-            api_key="test-key", base_url="https://example.invalid/v1",
+            api_key="test-key", base_url="https://api.deepseek.com/v1",
             good_model="test-model", wolf_model="test-model", fallback_model="",
             max_retries=1, agent_timeout=1,
         )
