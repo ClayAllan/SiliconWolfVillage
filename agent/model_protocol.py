@@ -65,6 +65,8 @@ def validate_base_url(value: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("Base URL 不能为空")
     value = value.strip()
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError("Base URL 不允许包含控制字符")
     if len(value) > 2048:
         raise ValueError("Base URL 过长")
     try:
