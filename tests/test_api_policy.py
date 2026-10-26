@@ -128,18 +128,19 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(provider_for("https://example.invalid", "deepseek"), "deepseek")
 
     def test_base_url_requires_trusted_https_endpoint(self):
-        self.assertEqual(validate_base_url("https://api.deepseek.com/v1"), "https://api.deepseek.com/v1")
-        self.assertEqual(validate_base_url("https://api.openai.com/v1"), "https://api.openai.com/v1")
-        for unsafe in (
-            "http://api.deepseek.com/v1",
-            "https://user:secret@api.deepseek.com/v1",
-            "https://api.deepseek.com/v1?api_key=secret",
-            "http://127.0.0.1:11434/v1",
-            "http://169.254.169.254/latest/meta-data",
-            "https://example.invalid/v1",
-        ):
-            with self.subTest(unsafe=unsafe), self.assertRaises(ValueError):
-                validate_base_url(unsafe)
+        with patch.dict("os.environ", {"SWV_ALLOWED_MODEL_HOSTS": "", "SWV_ALLOW_PRIVATE_MODEL_URLS": ""}):
+            self.assertEqual(validate_base_url("https://api.deepseek.com/v1"), "https://api.deepseek.com/v1")
+            self.assertEqual(validate_base_url("https://api.openai.com/v1"), "https://api.openai.com/v1")
+            for unsafe in (
+                "http://api.deepseek.com/v1",
+                "https://user:secret@api.deepseek.com/v1",
+                "https://api.deepseek.com/v1?api_key=secret",
+                "http://127.0.0.1:11434/v1",
+                "http://169.254.169.254/latest/meta-data",
+                "https://example.invalid/v1",
+            ):
+                with self.subTest(unsafe=unsafe), self.assertRaises(ValueError):
+                    validate_base_url(unsafe)
 
     def test_custom_and_private_endpoints_need_explicit_self_hosted_configuration(self):
         with patch.dict("os.environ", {"SWV_ALLOWED_MODEL_HOSTS": "example.invalid"}):
