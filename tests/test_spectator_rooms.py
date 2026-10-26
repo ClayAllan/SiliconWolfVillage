@@ -123,6 +123,8 @@ class SpectatorTests(unittest.TestCase):
         self.assertEqual(len(first["timeline"]), first["timeline_revision"])
         known = first["timeline_revision"]
 
+        self.engine.day = 1
+        self.engine.phase = "第1天"
         self.engine._log_player(1, "增量时间轴测试")
         self.service._publish_display()
         update = self.registry.read(
