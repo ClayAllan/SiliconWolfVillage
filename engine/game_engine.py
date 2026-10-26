@@ -696,12 +696,18 @@ class GameEngine:
         _lv = data.get("lovers")
         self.lovers = (int(_lv[0]), int(_lv[1])) if _lv else None
         self._resolving_chain = False
-        # ★V6.7：若存档恰在"竞选期(昨夜死者被暂时复活)"，读档(续到下一夜)前把这些死者落定为死，避免诈尸。
+        # A save made during the sheriff election cannot resume the Python generator
+        # in-place. Settle pending night deaths before continuing at the next-night boundary,
+        # and publish that settlement so public liveness cannot remain stale.
         _pend = data.get("pending_night_deaths") or {}
-        for k in _pend:
-            sk = int(k)
-            if sk in self.players:
-                self._mark_dead(sk, "读档恢复待结算死者", check=False)
+        pending_seats = sorted({int(k) for k in _pend if str(k).isdigit() and int(k) in self.players})
+        if pending_seats:
+            self._mark_dead_batch(pending_seats, "读档恢复待结算夜间死亡")
+            for sk in pending_seats:
+                self.published_alive[sk] = False
+            dead_list = "、".join(f"{seat}号" for seat in pending_seats)
+            self._log_judge(f"💾 读档恢复：存档发生在警长竞选期间，已结算并公布此前待结算的夜间死亡：{dead_list}。")
+            self._broadcast_event(f"【读档恢复】因从存档的下一夜继续，系统已结算此前待公布的夜间死亡：{dead_list}。")
         self.pending_night_deaths = {}
         self._active_request_id = None
         self._active_compression_id = None
@@ -1940,7 +1946,7 @@ class GameEngine:
             yield self._ev("start", "游戏开始")
             yield from self._run_cupid_link()   # ★V6.6 丘比特开局连线(第0夜)；无丘比特则 no-op
 
-        while True:
+        while not self.winner:
             self.day += 1
 
             # ==================== 夜晚 ====================
