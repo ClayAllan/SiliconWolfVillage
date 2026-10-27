@@ -74,6 +74,12 @@ def project_view(engine, viewer_seat=None):
     viewer_is_alive = (
         viewer_seat is not None and bool(engine.players[viewer_seat].get("alive", False))
     )
+    # 夜间已结算但尚未公开的死讯（例如警长竞选期间“死不知情”）不能提前触发全场身份公开。
+    viewer_is_eliminated = (
+        viewer_seat is not None
+        and not viewer_is_alive
+        and not getattr(engine, "published_alive", {}).get(viewer_seat, viewer_is_alive)
+    )
     last_stand_wolves = set(getattr(engine, "pending_wolf_night_seats", []) or [])
     last_stand_wolves.update(getattr(engine, "active_last_stand_wolves", []) or [])
     viewer_is_last_stand_wolf = viewer_seat is not None and viewer_seat in last_stand_wolves
@@ -87,7 +93,7 @@ def project_view(engine, viewer_seat=None):
     reveal_all_roles = (
         viewer_seat is None
         or bool(engine.winner)
-        or (viewer_seat is not None and not viewer_is_alive and not viewer_is_last_stand_wolf)
+        or (viewer_is_eliminated and not viewer_is_last_stand_wolf)
     )
     if reveal_all_roles:
         visible = set(engine.players)
