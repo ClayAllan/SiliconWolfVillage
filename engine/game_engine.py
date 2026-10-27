@@ -106,6 +106,8 @@ class GameEngine:
         self.pending_human_action = None
         self._pending_human_context = None
         self.human_private_messages = []
+        # 当前夜晚已完成的狼队讨论；只通过狼人视角投影给狼队成员。
+        self.current_wolf_talk = []
 
     # ========================================================
     # 发牌与初始化
@@ -1211,6 +1213,9 @@ class GameEngine:
         """狼队集体夜杀(讨论→盲投落刀→作战板)。多座位盲投，仍由引擎编排(非单座位 solo)。"""
         living_wolves = [w for w in self.wolves if self.players[w]["alive"]]
         wolf_talk = []
+        self.current_wolf_talk = []
+        # 不让上一夜的作战板在本夜讨论期间被误认为当前讨论。
+        self.war_board = None
         for w in living_wolves:
             mates = [x for x in living_wolves if x != w]
             prev_text = "\n".join(f"{x}号狼：{t}" for x, t in wolf_talk) or "（你是第一个发言的狼）"
@@ -1222,6 +1227,7 @@ class GameEngine:
                       f"speech输出你的战术建议(50-120字)。")
             yield from self._ask(w, prompt, f"{label} 狼人讨论")
             wolf_talk.append((w, self._last_resp["speech"]))
+            self.current_wolf_talk = list(wolf_talk)
             self._log_god(f"🐺 狼人（{w}号）战术：{self._last_resp['speech']}")
         if wolf_talk:
             discuss = "；".join(f"{x}号狼:{t}" for x, t in wolf_talk)
