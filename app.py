@@ -313,6 +313,14 @@ with st.sidebar:
     _boards = list(config.GAME_BOARDS.keys())
     human_mode = st.toggle("🎮 真人入座模式（1 真人 + 11 AI）", value=bool(getattr(ss.engine, "human_seat", None)),
                               help="首版仅支持 12 人标准预女猎守板子；真人身份随机分配。")
+    current_human_seat = getattr(ss.engine, "human_seat", None) if ss.engine is not None else None
+    if ss.game_service is not None and not ss.done and human_mode != (current_human_seat is not None):
+        st.warning("当前对局的模式不会因切换此开关而改变。请点击“开始新游戏”以按当前选择重新开局；新局会结束并替换当前对局。")
+    if ss.game_service is not None and not ss.done:
+        if current_human_seat is None:
+            st.caption("当前实际对局：纯 AI 模式（没有真人座位）。")
+        else:
+            st.caption(f"当前实际对局：真人入座模式，{current_human_seat:02d} 号为真人。")
     human_seat = st.selectbox("真人座位", list(range(1, 13)), index=0,
                               format_func=lambda seat: f"{seat:02d} 号", disabled=not human_mode)
     board = st.selectbox("🎲 游戏板子", _boards,
@@ -670,6 +678,11 @@ if live_engine is not None and getattr(live_engine, "human_seat", None) is not N
                 st.error(f"行动未提交：{error}")
     elif live_engine.players.get(live_engine.human_seat, {}).get("alive") is False:
         st.info("你已出局。可以继续观看本局后续进程；不会再向你请求行动。")
+    elif not ss.done:
+        if ss.running:
+            st.info("真人模式已启用；当前是其他玩家的回合，轮到你时会显示行动输入面板。")
+        else:
+            st.info("真人模式已启用，但对局当前已暂停。点击“继续”推进到你的回合。")
 
 with st.container(key="playback"):
     # 先预留位置，让头部和状态条位于操作按钮上方。
@@ -810,6 +823,11 @@ with st.container(key="insights_container"):
                 with st.expander("角色技能状态"):
                     state = engine.skill_states.get(selected, {})
                     st.json(state if state else {"说明":"该角色暂无可用的额外技能状态"})
+                if getattr(engine, "wolf_talk", None):
+                    with st.expander("🐺 狼队私密频道 · 本夜讨论", expanded=True):
+                        st.caption("仅狼人视角可见；显示本夜已经完成的队友讨论。")
+                        for seat, speech in engine.wolf_talk:
+                            st.write(f"{seat} 号：{speech}")
                 if engine.war_board:
                     wb_title = "狼队夜间作战板 · 狼人频道" if single_view else "狼队夜间作战板 · 全知"
                     with st.expander(wb_title):
