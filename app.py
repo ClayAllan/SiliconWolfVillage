@@ -164,6 +164,22 @@ def init_state():
         ss.pop(obsolete, None)
 
 
+def _human_action_integrity_error(engine):
+    """Detect a model-authored action recorded for the configured human seat."""
+    human_seat = getattr(engine, "human_seat", None)
+    if human_seat is None:
+        return ""
+    for row in getattr(engine, "reasoning_log", {}).get(human_seat, []):
+        response = row.get("response") or {}
+        if (row.get("actor_source") == "human" or response.get("_human_action")
+                or response.get("decision_source") == "human"):
+            continue
+        label = row.get("label", "未知行动")
+        return (f"安全保护：真人席位 {int(human_seat):02d} 已出现非真人提交的行动“{label}”。"
+                "对局已暂停，避免继续由 AI 代打；请重置并重新开始一局。")
+    return ""
+
+
 def sync_game_state():
     """只在 Streamlit 线程写会话状态，后台只操作 GameService。"""
     ss = st.session_state
@@ -175,6 +191,14 @@ def sync_game_state():
                       "last_archive", "archive_error"):
             ss[field] = getattr(snapshot, field)
         ss.advancing_since = snapshot.waiting_since
+        integrity_error = _human_action_integrity_error(ss.engine)
+        if integrity_error:
+            # 即使后台服务来自热更新前的旧代码，也在页面层立即暂停并报告真人席位被代打。
+            if snapshot.running:
+                ss.game_service.pause()
+            ss.running = False
+            ss.error = integrity_error
+            ss.status = "真人行动完整性检查失败，已暂停"
     return ss.engine
 
 
