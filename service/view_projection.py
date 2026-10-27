@@ -42,6 +42,7 @@ class SpectatorView:
     reasoning_log: dict
     skill_states: dict
     war_board: dict | None
+    wolf_talk: list
     wolves: list
     role_seats: dict
     counts: dict | None
@@ -107,6 +108,7 @@ def project_view(engine, viewer_seat=None):
         reasoning_log=logs,
         skill_states={seat: deepcopy(engine.roles[seat].skill_state()) for seat in (visible if viewer_seat is None else {viewer_seat})},
         war_board=deepcopy(engine.war_board) if war_board_allowed else None,
+        wolf_talk=deepcopy(getattr(engine, "current_wolf_talk", [])) if war_board_allowed else [],
         wolves=list(engine.wolves) if wolves_allowed else [],
         role_seats=dict(engine.role_seats) if viewer_seat is None else {},
         counts=faction_counts(engine) if viewer_seat is None else None,
