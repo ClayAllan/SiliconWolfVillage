@@ -299,7 +299,32 @@ class GameService:
             self._error = self.display_replay.issue
             return False
 
+    def _human_action_integrity_error(self):
+        """Reject continued play if a configured human seat already has an AI-authored action."""
+        human_seat = getattr(self._engine, "human_seat", None)
+        if human_seat is None:
+            return ""
+        history = getattr(self._engine, "reasoning_log", {}).get(human_seat, [])
+        for row in history:
+            response = row.get("response") or {}
+            if (row.get("actor_source") == "human" or response.get("_human_action")
+                    or response.get("decision_source") == "human"):
+                continue
+            label = row.get("label", "未知行动")
+            return (f"安全保护：真人席位 {int(human_seat):02d} 已出现非真人提交的行动“{label}”。"
+                    "对局已暂停，避免继续由 AI 代打；请重置并重新开始一局。")
+        return ""
+
     def _advance_locked(self):
+        integrity_error = self._human_action_integrity_error()
+        if integrity_error:
+            self._running = False
+            self._error = integrity_error
+            self._status = "真人行动完整性检查失败，已暂停"
+            self._last_event_type = "human_action_integrity_error"
+            self.revision += 1
+            config.get_logger().error(integrity_error)
+            return False
         if self.display_replay is not None and self.display_replay.issue:
             if not self._publish_display():
                 return False
