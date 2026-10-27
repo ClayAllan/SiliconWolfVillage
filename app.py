@@ -201,7 +201,11 @@ def install_game(engine, *, automatic, delay, turbo=False, generator=None):
 
 def start_game(api_key, base_url, good_model, wolf_model, temperature, agent_timeout,
                board=None, *, automatic=True, delay=0.6, turbo=False,
-               provider_mode="auto", thinking=True, reasoning_effort="low"):
+               provider_mode="auto", thinking=True, reasoning_effort="low", human_seat=None):
+    if human_seat is not None:
+        if type(human_seat) is not int or not 1 <= human_seat <= 12:
+            raise ValueError("真人座位必须在 1—12 号之间")
+        board = config.DEFAULT_BOARD
     board_roles = config.GAME_BOARDS[board or config.DEFAULT_BOARD]
     config.get_logger().info(f"==== 新游戏开始 板子={board} 好营={good_model} 狼营={wolf_model} "
                              f"单步超时={agent_timeout}s temp={temperature} ====")
@@ -210,6 +214,7 @@ def start_game(api_key, base_url, good_model, wolf_model, temperature, agent_tim
                            temperature=temperature, agent_timeout=int(agent_timeout),
                            provider_mode=provider_mode, thinking=thinking, reasoning_effort=reasoning_effort)
     engine = GameEngine(manager)
+    engine.human_seat = human_seat
     engine.board_name = board or config.DEFAULT_BOARD
     try:
         engine.enable_recording(REPLAY_DIR)
@@ -289,6 +294,10 @@ def test_connection(api_key, base_url, model, **settings):
 init_state()
 engine = sync_game_state()
 ss = st.session_state
+live_for_mode = ss.engine
+if live_for_mode is not None and getattr(live_for_mode, "human_seat", None) is not None:
+    ss.viewer_seat = live_for_mode.human_seat
+    ss.viewer_mode = "单一视角"
 single_view = ss.viewer_mode == "单一视角"
 
 # 热更新兼容：若修改代码前已有一局刚结束但尚未落盘，在当前会话下一次 rerun 时补归档。
@@ -302,9 +311,17 @@ with st.sidebar:
     st.caption("选择板子与模型，然后在工作台开始对局。")
     # 🎲 游戏板子选择(V6.4)：开新局/读档前切换，决定本局发什么身份(如含白狼王)。
     _boards = list(config.GAME_BOARDS.keys())
+    human_mode = st.checkbox("🎮 真人入座模式（1 真人 + 11 AI）", value=bool(getattr(ss.engine, "human_seat", None)),
+                              help="首版仅支持 12 人标准预女猎守板子；真人身份随机分配。")
+    human_seat = st.selectbox("真人座位", list(range(1, 13)), index=0,
+                              format_func=lambda seat: f"{seat:02d} 号", disabled=not human_mode)
     board = st.selectbox("🎲 游戏板子", _boards,
                          index=_boards.index(config.DEFAULT_BOARD) if config.DEFAULT_BOARD in _boards else 0,
-                         help="开新局点【开始新游戏】时生效；不同板子=不同身份配置。")
+                         disabled=human_mode,
+                         help="真人模式固定使用 12 人标准预女猎守板子。")
+    if human_mode:
+        board = config.DEFAULT_BOARD
+        st.caption("真人模式下会隐藏全知视角与上帝干预入口。")
     default_key = ""  # Public visitors always supply their own key.
     api_key = st.text_input("DeepSeek API Key", value=default_key, type="password",
                             help="填写你自己的 API Key；请求由托管服务器转发给所选模型服务。")
@@ -591,9 +608,15 @@ with st.container(key="playback"):
     overview_slot = st.empty()
     with st.container(key="view_controls"):
         mode_col, seat_col, theme_col = st.columns([1.3,1,1.2])
-        mode_col.radio("观战视角", ["全知视角", "单一视角"], horizontal=True, key="viewer_mode")
-        seat_col.selectbox("代入席位", list(range(1,13)), key="viewer_seat",
-                           format_func=lambda seat: f"{seat:02d} 号", disabled=not single_view)
+        if getattr(live_engine, "human_seat", None) is not None:
+            mode_col.info(f"真人玩家：{live_engine.human_seat:02d} 号（受限玩家视角）")
+            st.session_state.viewer_mode = "单一视角"
+            st.session_state.viewer_seat = live_engine.human_seat
+            seat_col.caption(f"当前玩家：{live_engine.human_seat:02d} 号")
+        else:
+            mode_col.radio("观战视角", ["全知视角", "单一视角"], horizontal=True, key="viewer_mode")
+            seat_col.selectbox("代入席位", list(range(1,13)), key="viewer_seat",
+                               format_func=lambda seat: f"{seat:02d} 号", disabled=not single_view)
         theme_col.markdown("**外观主题**")
         theme_col.caption("右上角 ⋮ → Theme；Light 浅色 / Dark 深色 / System 跟随系统")
         reveal_counts = st.checkbox("显示全知阵营人数", value=False, key="reveal_factions",
@@ -606,7 +629,8 @@ with st.container(key="playback"):
             try:
                 start_game(api_key, base_url, good_model, wolf_model, temperature, agent_timeout, board,
                            automatic=auto, delay=delay, turbo=is_turbo,
-                           provider_mode=provider_mode, thinking=thinking, reasoning_effort=reasoning_effort)
+                           provider_mode=provider_mode, thinking=thinking, reasoning_effort=reasoning_effort,
+                           human_seat=human_seat if human_mode else None)
                 st.rerun()
             except (ValueError, RuntimeError) as error:
                 st.error(str(error))
