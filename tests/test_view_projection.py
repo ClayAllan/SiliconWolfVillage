@@ -9,6 +9,7 @@ class ViewProjectionTests(unittest.TestCase):
     def test_each_single_view_only_receives_its_own_identity_and_reasoning(self):
         engine = preview_engine()
         engine.war_board = {"day":2,"note":"秘密刀口","discussion":[(1,"秘密讨论")]}
+        engine.current_wolf_talk = [(1, "本夜实时队友讨论")]
         for seat in range(1,13):
             with self.subTest(seat=seat):
                 view = project_view(engine,seat)
@@ -23,6 +24,7 @@ class ViewProjectionTests(unittest.TestCase):
                         self.assertEqual(view.players[good]["role"], "未知")
                         self.assertEqual(view.reasoning_log[good], [])
                     self.assertIsNotNone(view.war_board)
+                    self.assertEqual(view.wolf_talk, [(1, "本夜实时队友讨论")])
                     self.assertEqual(view.wolves, list(engine.wolves))
                 else:
                     # 好人视角：仅知晓自己，所有其他玩家身份未知，无狼队情报
@@ -32,6 +34,7 @@ class ViewProjectionTests(unittest.TestCase):
                         self.assertNotIn(other,view.skill_states)
                         self.assertNotIn("memory",view.players[other])
                     self.assertIsNone(view.war_board)
+                    self.assertEqual(view.wolf_talk, [])
                     self.assertEqual(view.wolves,[])
                 self.assertIsNone(view.counts)
                 self.assertEqual(view.role_seats,{})
