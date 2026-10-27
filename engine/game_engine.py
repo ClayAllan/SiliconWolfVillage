@@ -893,6 +893,7 @@ class GameEngine:
             self._active_request_id = None
             self._skip_current = False
             self._last_resp = resp
+        self._last_resp = resp
         if resp.get("_is_fallback") and public:
             resp["speech"] = "【技术性未提交发言】" if resp.get("decision_source") != "manual_skip" else "【人工跳过发言】"
         fatal = resp.get("_fatal_error", "")
