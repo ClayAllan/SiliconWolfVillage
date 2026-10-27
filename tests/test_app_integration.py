@@ -85,7 +85,9 @@ class AppIntegrationTests(unittest.TestCase):
         with patch.object(GameEngine, "run", short_game):
             self.click("🎬 开始新游戏")
         # 完整页面现在正常返回，测试需像浏览器的下一次定时刷新一样收集终局快照。
-        deadline = time.monotonic() + 4
+        # Shared CI runners can be briefly loaded; allow the background service enough
+        # time without making the regression test depend on a tight 4-second scheduling window.
+        deadline = time.monotonic() + 8
         while not self.app.session_state["game_service"].snapshot().done:
             self.assertLess(time.monotonic(), deadline)
             threading.Event().wait(.01)
