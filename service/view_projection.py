@@ -77,6 +77,7 @@ def project_view(engine, viewer_seat=None):
     # 夜间已结算但尚未公开的死讯（例如警长竞选期间“死不知情”）不能提前触发全场身份公开。
     viewer_is_eliminated = (
         viewer_seat is not None
+        and getattr(engine, "human_seat", None) == viewer_seat
         and not viewer_is_alive
         and not getattr(engine, "published_alive", {}).get(viewer_seat, viewer_is_alive)
     )
