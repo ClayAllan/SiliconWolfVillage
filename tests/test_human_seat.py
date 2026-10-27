@@ -12,6 +12,8 @@ from test_runtime_regressions import MemoryOnlyManager
 class HumanSeatTests(unittest.TestCase):
     def setUp(self):
         self.manager = MemoryOnlyManager()
+        self.manager.has_pending = lambda: False
+        self.manager.get_usage_snapshot = lambda: {}
         self.engine = GameEngine(self.manager)
         self.engine.human_seat = 1
         self.engine.setup(config.GAME_BOARDS[config.DEFAULT_BOARD])
