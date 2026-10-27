@@ -62,9 +62,12 @@ class HumanSeatTests(unittest.TestCase):
                 service.close()
 
     def test_human_projection_hides_unpublished_death_state(self):
+        viewer = next(s for s in range(1, 13)
+                      if self.engine.roles[s].camp != "狼人" and s != 2)
+        self.engine.human_seat = viewer
         self.engine.players[2]["alive"] = False
         self.engine.published_alive[2] = True
-        view = project_view(self.engine, viewer_seat=1)
+        view = project_view(self.engine, viewer_seat=viewer)
         self.assertEqual(view.players[2]["role"], "未知")
         self.assertTrue(view.players[2]["alive"])
         self.assertEqual(view.role_seats, {})
