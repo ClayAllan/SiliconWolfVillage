@@ -93,7 +93,7 @@ def project_view(engine, viewer_seat=None):
     }
     logs = {
         seat: [{**{key: deepcopy(row.get(key, "")) for key in ("label", "reasoning", "speech")},
-                "actor_source": _action_source(row)}
+                **({"actor_source": _action_source(row)} if _action_source(row) != "unknown" else {})}
                for row in engine.reasoning_log.get(seat, [])] if (seat in visible if viewer_seat is None else seat == viewer_seat) else []
         for seat in engine.players
     }
