@@ -368,8 +368,12 @@ with st.sidebar:
         help="默认只渲染最新记录以减小 WebSocket 消息；完整原始记录仍会写入本局归档。暂停后可开启回看。",
     )
 
+    if human_mode:
+        # 真人对局默认不生成共享回放，避免把本地私密行动上下文带入展示记录。
+        ss.enable_sharing = False
     st.checkbox("共享观战与回放记录（仅新建对局生效）", key="enable_sharing", value=False,
-                disabled=ss.game_service is not None, help="额外记录按视角过滤的展示帧；不额外调用模型。默认关闭。")
+                disabled=ss.game_service is not None or human_mode,
+                help="真人入座模式关闭共享回放；纯 AI 对局可按需启用。")
 
     if ss.game_service is not None:
         ss.game_service.configure(automatic=auto, delay=delay, turbo=is_turbo, react_budget=react_budget)
