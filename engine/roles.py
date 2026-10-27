@@ -395,9 +395,10 @@ class Hunter(BaseRole):
             engine._mark_dead(target, "猎人开枪", check=False)
             self.shot = target
             engine._confirm_role(self.seat, "猎人", "公开发动猎枪")
-            engine._log_judge(f"💥 猎人开枪带走了 {target}号（{engine.players[target]['role']}）！")
+            # 公开确认的是猎人身份与开枪事实；被带走者的真实身份必须保密到终局。
+            engine._log_judge(f"💥 猎人开枪带走了 {target}号！")
             engine._broadcast_event(f"【法官播报】{self.seat}号是猎人，开枪带走了{target}号！")
-            engine._add_replay(f"- 🏹 猎人({self.seat}号)开枪带走 {target}号({engine.players[target]['role']})")
+            engine._add_replay(f"- 🏹 猎人({self.seat}号)开枪带走 {target}号（身份暂不公开）")
         else:
             # ★V6.7+：不开枪 → 【不公开身份】(只上帝视角可见)，避免白白把猎人身份送给好人/狼人
             engine._log_god(f"🕊️ 猎人（{self.seat}号）私下决定【不开枪】，未暴露猎人身份。")
