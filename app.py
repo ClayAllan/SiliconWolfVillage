@@ -2,7 +2,6 @@
 """硅基狼村观战工作台。运行：python -m streamlit run app.py
 后台服务推进对局；圆桌、动态与玩家观察室只读取快照。"""
 
-import importlib
 import json
 import os
 import time
@@ -18,6 +17,7 @@ from agent.model_protocol import ERROR_LABELS
 from storage.session_storage import storage_paths
 from agent.ai_agent import AgentManager
 from storage.game_archive import game_statistics
+from engine.game_engine import GameEngine
 from service.game_service import GameService
 from ui.ui_runtime import AUTO_POLL_SECONDS
 from service.live_feed import schedule_page_refresh
@@ -224,15 +224,13 @@ def install_game(engine, *, automatic, delay, turbo=False, generator=None):
 
 
 def _new_game_engine(manager):
-    """Reload the engine module before creating a game.
+    """Create an engine only if the currently imported class has the human-action guard.
 
-    Streamlit reruns the page script while local Python modules may remain cached.
-    Reloading here ensures a newly started game uses the current human-seat safeguards,
-    rather than a stale GameEngine class from before a hot update.
+    Do not reload this module here: other modules and tests may hold references to the
+    existing GameEngine class. A stale runtime must fail closed and be restarted, not
+    create a second class identity and bypass existing hooks or instrumentation.
     """
-    import engine.game_engine as game_engine_module
-    game_engine_module = importlib.reload(game_engine_module)
-    engine_class = game_engine_module.GameEngine
+    engine_class = GameEngine
     guard_constants = "\\n".join(
         item for item in engine_class._record_reasoning.__code__.co_consts
         if isinstance(item, str)
@@ -240,14 +238,13 @@ def _new_game_engine(manager):
     if "安全保护" not in guard_constants or "真人席位" not in guard_constants:
         raise RuntimeError(
             "当前运行的游戏引擎未加载真人行动安全保护，已拒绝开局。"
-            "请刷新应用；若仍出现此提示，需要重启线上应用实例。"
+            "请重启线上应用实例后重试。"
         )
     config.get_logger().info(
-        f"GameEngine runtime refreshed from {game_engine_module.__file__}; "
+        f"GameEngine runtime verified from {engine_class.__module__}; "
         "human-seat action guard verified."
     )
     return engine_class(manager)
-
 
 def start_game(api_key, base_url, good_model, wolf_model, temperature, agent_timeout,
                board=None, *, automatic=True, delay=0.6, turbo=False,
