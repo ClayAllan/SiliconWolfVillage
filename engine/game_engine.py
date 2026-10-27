@@ -105,6 +105,7 @@ class GameEngine:
         self.human_seat = None
         self.pending_human_action = None
         self._pending_human_context = None
+        self.human_private_messages = []
 
     # ========================================================
     # 发牌与初始化
@@ -857,7 +858,7 @@ class GameEngine:
             self._last_resp = None
             self.pending_human_action = {
                 "action_id": request_id, "seat": seat, "kind": response_kind,
-                "label": label, "phase": self.phase, "day": self.day,
+                "label": label, "phase": self.phase, "day": self.day, "prompt": prompt,
                 "public": bool(public), "allowed_targets": action_context.get("allowed_targets"),
                 "allowed_flags": action_context.get("allowed_flags", []),
             }
@@ -1089,6 +1090,18 @@ class GameEngine:
             prompt, kind, label = step
             yield from self._ask(seat, prompt, label, response_kind=kind)
             role.parse_night_response(self, self._last_resp)
+            if seat == self.human_seat:
+                if kind == "check" and self.night.get("seer_check"):
+                    target, result = self.night["seer_check"]
+                    self.human_private_messages.append(f"预言家查验结果：{target}号是【{result}】。")
+                elif kind == "guard":
+                    target = self.night.get("guard_target")
+                    self.human_private_messages.append(f"守卫行动已记录：{'守护' + str(target) + '号' if target else '本夜空守'}。")
+                elif kind == "antidote":
+                    self.human_private_messages.append("女巫解药选择已记录；请以当前技能状态为准。")
+                elif kind == "poison":
+                    target = self.night.get("witch_poison")
+                    self.human_private_messages.append(f"女巫毒药选择已记录：{'毒杀' + str(target) + '号' if target else '本夜不使用毒药'}。")
 
     def _run_death_action(self, role):
         """临终技能事件回调(猎人开枪)：★V6.7+ 私下询问——【不再公开预告身份】(原"X号猎人倒下"会白送身份)，
