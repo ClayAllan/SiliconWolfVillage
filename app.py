@@ -727,6 +727,11 @@ if live_engine is not None and getattr(live_engine, "human_seat", None) is not N
                 st.rerun()
             except (ValueError, RuntimeError) as error:
                 st.error(f"行动未提交：{error}")
+    elif live_engine.players.get(live_engine.human_seat, {}).get("alive") is False and (
+        live_engine.human_seat in (getattr(live_engine, "pending_wolf_night_seats", []) or [])
+        or live_engine.human_seat in (getattr(live_engine, "active_last_stand_wolves", []) or [])
+    ):
+        st.info("你已自爆出局，但按本局规则仍可参与本夜最后一次狼人讨论与落刀；轮到你时会显示行动面板。")
     elif live_engine.players.get(live_engine.human_seat, {}).get("alive") is False:
         st.info("你已出局。可以继续观看本局后续进程；不会再向你请求行动。")
     elif not ss.done:
@@ -735,7 +740,16 @@ if live_engine is not None and getattr(live_engine, "human_seat", None) is not N
         else:
             st.info("真人模式已启用，但对局当前已暂停。点击“继续”推进到你的回合。")
     human_role = live_engine.roles.get(live_engine.human_seat) if live_engine.human_seat in live_engine.roles else None
-    if human_role is not None and getattr(human_role, "camp", "") == "狼人":
+    human_has_wolf_access = bool(
+        human_role is not None
+        and getattr(human_role, "camp", "") == "狼人"
+        and (
+            live_engine.players.get(live_engine.human_seat, {}).get("alive", False)
+            or live_engine.human_seat in (getattr(live_engine, "pending_wolf_night_seats", []) or [])
+            or live_engine.human_seat in (getattr(live_engine, "active_last_stand_wolves", []) or [])
+        )
+    )
+    if human_has_wolf_access:
         live_wolf_talk = getattr(live_engine, "current_wolf_talk", [])
         if live_wolf_talk:
             st.subheader("🐺 狼队私密频道 · 本夜讨论")
