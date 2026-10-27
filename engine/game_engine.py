@@ -1293,6 +1293,9 @@ class GameEngine:
                       f"💡偶尔大胆【自刀】(刀掉自己队友)能制造‘悲情金水/真神’假象、骗取好人深度信任，"
                       f"是高风险但极出彩、提升观赏性的操作，局势合适时不妨一试。")
             yield from self._ask(w, prompt, f"{label} 狼人落刀", response_kind="vote")
+            # 自爆者提交最后一次落刀后立即失去狼队私密视角；身份此时对其开放。
+            if w in last_stand_wolves and w in self.active_last_stand_wolves:
+                self.active_last_stand_wolves.remove(w)
             vt = self._last_resp.get("vote_target", 0)
             kill_votes[w] = vt if vt in self.alive_seats() else 0   # 最后行动狼同样可贡献一票，但只能刀当前存活目标
             self._log_god(f"🐺 狼人（{w}号）落刀 → {'空刀' if not kill_votes[w] else str(kill_votes[w]) + '号'}")
