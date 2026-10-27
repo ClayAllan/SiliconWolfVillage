@@ -18,6 +18,16 @@ def project_api_health(health, viewer_seat=None):
     return result
 
 
+def _action_source(row):
+    source = row.get("actor_source")
+    if source in {"human", "ai"}:
+        return source
+    response = row.get("response") or {}
+    if response.get("_human_action") or response.get("decision_source") == "human":
+        return "human"
+    return "ai" if response else "unknown"
+
+
 def faction_counts(engine):
     alive = engine.alive_seats()
     return {
@@ -82,7 +92,8 @@ def project_view(engine, viewer_seat=None):
         for seat, player in engine.players.items()
     }
     logs = {
-        seat: [{key: deepcopy(row.get(key, "")) for key in ("label", "reasoning", "speech")}
+        seat: [{**{key: deepcopy(row.get(key, "")) for key in ("label", "reasoning", "speech")},
+                "actor_source": _action_source(row)}
                for row in engine.reasoning_log.get(seat, [])] if (seat in visible if viewer_seat is None else seat == viewer_seat) else []
         for seat in engine.players
     }
