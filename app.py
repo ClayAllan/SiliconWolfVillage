@@ -683,6 +683,15 @@ if live_engine is not None and getattr(live_engine, "human_seat", None) is not N
             st.info("真人模式已启用；当前是其他玩家的回合，轮到你时会显示行动输入面板。")
         else:
             st.info("真人模式已启用，但对局当前已暂停。点击“继续”推进到你的回合。")
+    human_role = live_engine.roles.get(live_engine.human_seat) if live_engine.human_seat in live_engine.roles else None
+    if human_role is not None and getattr(human_role, "camp", "") == "狼人":
+        live_wolf_talk = getattr(live_engine, "current_wolf_talk", [])
+        if live_wolf_talk:
+            st.subheader("🐺 狼队私密频道 · 本夜讨论")
+            st.caption("仅真人狼人可见；这里会随队友完成讨论而更新。")
+            for talk_seat, talk_text in live_wolf_talk:
+                st.markdown(f"**{talk_seat} 号：**")
+                st.write(talk_text)
 
 with st.container(key="playback"):
     # 先预留位置，让头部和状态条位于操作按钮上方。
@@ -823,11 +832,6 @@ with st.container(key="insights_container"):
                 with st.expander("角色技能状态"):
                     state = engine.skill_states.get(selected, {})
                     st.json(state if state else {"说明":"该角色暂无可用的额外技能状态"})
-                if getattr(engine, "wolf_talk", None):
-                    with st.expander("🐺 狼队私密频道 · 本夜讨论", expanded=True):
-                        st.caption("仅狼人视角可见；显示本夜已经完成的队友讨论。")
-                        for seat, speech in engine.wolf_talk:
-                            st.write(f"{seat} 号：{speech}")
                 if engine.war_board:
                     wb_title = "狼队夜间作战板 · 狼人频道" if single_view else "狼队夜间作战板 · 全知"
                     with st.expander(wb_title):
