@@ -50,6 +50,10 @@ class HumanGameRulesTests(unittest.TestCase):
         self.engine.war_board = {"day": 2, "discussion": [(1, "狼队秘密")], "kill": 3}
         self.engine.current_wolf_talk = [(1, "狼队秘密")]
 
+        # Death has been settled internally but not announced yet: keep the other roles hidden.
+        before_announcement = project_view(self.engine, viewer_seat=viewer)
+        self.assertEqual(before_announcement.players[next(s for s in self.engine.players if s != viewer)]["role"], "未知")
+        self.engine.published_alive[viewer] = False
         view = project_view(self.engine, viewer_seat=viewer)
 
         for seat in self.engine.players:
