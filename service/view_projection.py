@@ -71,12 +71,25 @@ class SpectatorView:
 def project_view(engine, viewer_seat=None):
     if viewer_seat is not None and viewer_seat not in engine.players:
         raise ValueError("无效的代入席位")
+    viewer_is_alive = (
+        viewer_seat is not None and bool(engine.players[viewer_seat].get("alive", False))
+    )
+    last_stand_wolves = set(getattr(engine, "pending_wolf_night_seats", []) or [])
+    last_stand_wolves.update(getattr(engine, "active_last_stand_wolves", []) or [])
+    viewer_is_last_stand_wolf = viewer_seat is not None and viewer_seat in last_stand_wolves
     is_wolf_viewer = (
         viewer_seat is not None
         and viewer_seat in engine.roles
         and getattr(engine.roles[viewer_seat], "camp", "") == "狼人"
+        and (viewer_is_alive or viewer_is_last_stand_wolf)
     )
-    if viewer_seat is None:
+    # 终局或真人玩家已出局后公开身份；白天自爆狼在最后一次狼队行动完成前仍保留狼队视角。
+    reveal_all_roles = (
+        viewer_seat is None
+        or bool(engine.winner)
+        or (viewer_seat is not None and not viewer_is_alive and not viewer_is_last_stand_wolf)
+    )
+    if reveal_all_roles:
         visible = set(engine.players)
     elif is_wolf_viewer:
         visible = {viewer_seat} | set(engine.wolves)
@@ -121,7 +134,7 @@ def project_view(engine, viewer_seat=None):
         war_board=deepcopy(engine.war_board) if war_board_allowed else None,
         wolf_talk=deepcopy(getattr(engine, "current_wolf_talk", [])) if war_board_allowed else [],
         wolves=list(engine.wolves) if wolves_allowed else [],
-        role_seats=dict(engine.role_seats) if viewer_seat is None else {},
-        counts=faction_counts(engine) if viewer_seat is None else None,
+        role_seats=dict(engine.role_seats) if reveal_all_roles else {},
+        counts=faction_counts(engine) if reveal_all_roles else None,
         initial_counts=dict(initial), viewer_seat=viewer_seat, feed_issues=feed_issues,
     )
