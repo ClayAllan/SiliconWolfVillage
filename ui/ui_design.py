@@ -228,7 +228,7 @@ def event(row):
 
 
 def reasoning(row):
-    source_label = {"human": "真人提交", "ai": "模型自述"}.get(row.get("actor_source"), "来源未记录")
+    source_label = {"human": "真人提交", "ai": "模型自述"}.get(row.get("actor_source"), "模型自述")
     return (f'<article class="wv-reasoning"><div class="wv-label">{text(row.get("label", "推理记录"))} / {text(source_label)}</div>'
             f'<p>{text(row.get("reasoning", "暂无推理记录"))}</p>'
             f'<p class="wv-action">公开行动 · {text(row.get("speech", ""))}</p></article>')
