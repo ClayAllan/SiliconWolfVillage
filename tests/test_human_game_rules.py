@@ -64,6 +64,18 @@ class HumanGameRulesTests(unittest.TestCase):
         self.assertEqual(view.wolf_talk, [])
         self.assertEqual(view.wolves, [])
 
+    def test_spectator_cannot_unlock_roles_by_selecting_a_dead_seat(self):
+        viewer = next(s for s in self.engine.players if self.engine.roles[s].camp != "狼人")
+        self.engine.players[viewer]["alive"] = False
+        self.engine.published_alive[viewer] = False
+        self.engine.human_seat = None
+
+        view = project_view(self.engine, viewer_seat=viewer)
+
+        other = next(s for s in self.engine.players if s != viewer)
+        self.assertEqual(view.players[other]["role"], "未知")
+        self.assertEqual(view.role_seats, {})
+
     def test_live_human_sees_all_roles_after_game_ends(self):
         viewer = next(s for s in self.engine.players if self.engine.roles[s].camp != "狼人")
         self.engine.human_seat = viewer
