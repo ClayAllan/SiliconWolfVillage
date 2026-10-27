@@ -827,7 +827,7 @@ class GameEngine:
         for seat, source in sources.items():
             if source != "model":
                 reason = {"technical_fallback": "技术性未提交", "manual_skip": "人工跳过",
-                          "invalid_target": "无效目标"}.get(source, "未提交")
+                          "invalid_target": "无效目标", "human": "真人玩家主动弃票"}.get(source, "未提交")
                 detail = re.sub(r"(?<!\d)" + re.escape(f"{seat}号->弃票"),
                                 f"{seat}号->{reason}（不代表主动弃票）", detail)
         return detail
