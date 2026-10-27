@@ -2,6 +2,7 @@
 """硅基狼村观战工作台。运行：python -m streamlit run app.py
 后台服务推进对局；圆桌、动态与玩家观察室只读取快照。"""
 
+import importlib
 import json
 import os
 import time
@@ -223,6 +224,22 @@ def install_game(engine, *, automatic, delay, turbo=False, generator=None):
     return service
 
 
+def _new_game_engine(manager):
+    """Reload the engine module before creating a game.
+
+    Streamlit reruns the page script while local Python modules may remain cached.
+    Reloading here ensures a newly started game uses the current human-seat safeguards,
+    rather than a stale GameEngine class from before a hot update.
+    """
+    import engine.game_engine as game_engine_module
+    game_engine_module = importlib.reload(game_engine_module)
+    config.get_logger().info(
+        f"GameEngine runtime refreshed from {game_engine_module.__file__}; "
+        f"human-seat safeguards loaded={hasattr(game_engine_module.GameEngine, '_record_reasoning')}"
+    )
+    return game_engine_module.GameEngine(manager)
+
+
 def start_game(api_key, base_url, good_model, wolf_model, temperature, agent_timeout,
                board=None, *, automatic=True, delay=0.6, turbo=False,
                provider_mode="auto", thinking=True, reasoning_effort="low", human_seat=None):
@@ -237,7 +254,7 @@ def start_game(api_key, base_url, good_model, wolf_model, temperature, agent_tim
                            good_model=good_model, wolf_model=wolf_model,
                            temperature=temperature, agent_timeout=int(agent_timeout),
                            provider_mode=provider_mode, thinking=thinking, reasoning_effort=reasoning_effort)
-    engine = GameEngine(manager)
+    engine = _new_game_engine(manager)
     engine.human_seat = human_seat
     engine.board_name = board or config.DEFAULT_BOARD
     try:
@@ -276,7 +293,7 @@ def load_game(filename, api_key, base_url, good_model, wolf_model, temperature, 
                            provider_mode=provider_mode, thinking=thinking, reasoning_effort=reasoning_effort)
     try:
         manager.load_state(payload.get("manager", {}))
-        engine = GameEngine(manager)
+        engine = _new_game_engine(manager)
         engine.load_state(payload.get("engine", {}))
         engine.enable_recording(REPLAY_DIR)
         return engine
