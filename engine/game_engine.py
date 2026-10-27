@@ -108,6 +108,11 @@ class GameEngine:
         self.human_private_messages = []
         # 当前夜晚已完成的狼队讨论；只通过狼人视角投影给狼队成员。
         self.current_wolf_talk = []
+        # 白天自爆的狼人可按本项目规则参与下一夜最后一次讨论与落刀。
+        # pending 可存档；active 仅表示狼队阶段仍可见狼队私密信息，不序列化。
+        self.pending_wolf_night_seats: list[int] = []
+        self.pending_wolf_night_day: int | None = None
+        self.active_last_stand_wolves: list[int] = []
 
     # ========================================================
     # 发牌与初始化
@@ -159,6 +164,9 @@ class GameEngine:
         self._charm_sprung = False
         self.lovers = None
         self._resolving_chain = False
+        self.pending_wolf_night_seats = []
+        self.pending_wolf_night_day = None
+        self.active_last_stand_wolves = []
         # —— 复盘档案：开篇 + 真身配置 ——
         self.replay_logs = []
         self.objective_events = []
@@ -624,6 +632,8 @@ class GameEngine:
             "charm_sprung": self._charm_sprung,
             "lovers": list(self.lovers) if self.lovers else None,
             "pending_night_deaths": {str(k): v for k, v in self.pending_night_deaths.items()},
+            "pending_wolf_night_seats": list(self.pending_wolf_night_seats),
+            "pending_wolf_night_day": self.pending_wolf_night_day,
         }
 
     def load_state(self, data: dict):
@@ -702,6 +712,14 @@ class GameEngine:
         self.explosion_events = [
             dict(item) for item in (data.get("explosion_events") or []) if isinstance(item, dict)
         ]
+        self.pending_wolf_night_seats = sorted({
+            int(seat) for seat in (data.get("pending_wolf_night_seats") or [])
+            if str(seat).isdigit() and int(seat) in self.players
+        })
+        pending_wolf_day = data.get("pending_wolf_night_day")
+        self.pending_wolf_night_day = int(pending_wolf_day) if str(pending_wolf_day or "").isdigit() else None
+        # 活跃阶段不跨存档恢复；生成器从下一夜边界重建，避免重复发放已开始的最后行动。
+        self.active_last_stand_wolves = []
         # ★V6.5/6.6 变体引擎态恢复
         self.last_exiled_seat = data.get("last_exiled_seat")
         self.last_exiled_camp = data.get("last_exiled_camp")
@@ -1220,20 +1238,39 @@ class GameEngine:
         cupid.parse_link_response(self, self._last_resp)            # 置 self.lovers + 私下告知双方 + 复盘
 
     def _run_wolf_pack_night(self, label):
-        """狼队集体夜杀(讨论→盲投落刀→作战板)。多座位盲投，仍由引擎编排(非单座位 solo)。"""
+        """狼队集体夜杀；白天自爆者可按本项目规则参加下一夜最后一次讨论与落刀。"""
         living_wolves = [w for w in self.wolves if self.players[w]["alive"]]
+        last_stand_wolves = []
+        if self.pending_wolf_night_day == self.day:
+            last_stand_wolves = [
+                w for w in self.pending_wolf_night_seats
+                if w in self.wolves and w in self.players and not self.players[w]["alive"]
+            ]
+        # 进入狼队阶段即消费“下一夜”令牌；存档恢复从下一夜开始，不会重复发放这次最后行动。
+        if self.pending_wolf_night_day is not None and self.pending_wolf_night_day <= self.day:
+            self.pending_wolf_night_seats = []
+            self.pending_wolf_night_day = None
+        self.active_last_stand_wolves = list(last_stand_wolves)
+        wolf_participants = sorted(set(living_wolves + last_stand_wolves))
         wolf_talk = []
         self.current_wolf_talk = []
         # 不让上一夜的作战板在本夜讨论期间被误认为当前讨论。
         self.war_board = None
-        for w in living_wolves:
+        for w in wolf_participants:
             mates = [x for x in living_wolves if x != w]
-            prev_text = "\n".join(f"{x}号狼：{t}" for x, t in wolf_talk) or "（你是第一个发言的狼）"
-            prompt = (f"【{self.phase}·狼人战术讨论】你的存活狼队友：{mates}。当前存活：{self.alive_str()}。\n"
-                      f"狼队此前发言：\n{prev_text}\n"
+            last_stand_mates = [x for x in last_stand_wolves if x != w]
+            prev_text = "\\n".join(f"{x}号狼：{t}" for x, t in wolf_talk) or "（你是第一个发言的狼）"
+            if w in last_stand_wolves:
+                status_note = ("你已因白天自爆出局；按本局规则，你可以参加本夜最后一次狼人讨论与落刀。"
+                               "本次行动结束后你彻底退出，不计入存活人数，也不再参与后续夜晚。")
+            else:
+                status_note = (f"本夜可参与最后行动的已自爆狼队友：{last_stand_mates}。"
+                               "这些队友已出局，只能参与本夜讨论与落刀，不计入存活人数。") if last_stand_mates else ""
+            prompt = (f"【{self.phase}·狼人战术讨论】{status_note}你的存活狼队友：{mates}。当前存活：{self.alive_str()}。\\n"
+                      f"狼队此前发言：\\n{prev_text}\\n"
                       f"请和队友简短商量今晚战术与明天分工：刀谁；明天谁【起跳预言家】、谁【倒钩】(伪装好人、混进好人阵营冲票)、"
                       f"谁压身份；是否考虑【自刀】(刀自己人骗取好人信任，高风险慎用)。"
-                      f"原则：稳健、以胜利为目标、别乱玩。\n{WOLF_KILL_TACTICS}\n"
+                      f"原则：稳健、以胜利为目标、别乱玩。\\n{WOLF_KILL_TACTICS}\\n"
                       f"speech输出你的战术建议(50-120字)。")
             yield from self._ask(w, prompt, f"{label} 狼人讨论")
             wolf_talk.append((w, self._last_resp["speech"]))
@@ -1241,22 +1278,23 @@ class GameEngine:
             self._log_god(f"🐺 狼人（{w}号）战术：{self._last_resp['speech']}")
         if wolf_talk:
             discuss = "；".join(f"{x}号狼:{t}" for x, t in wolf_talk)
-            for w in living_wolves:
+            for w in wolf_participants:
                 self.manager.inject(w, f"【狼队第{self.day}夜讨论纪要】{discuss}")
         else:
             discuss = "（无）"
         kill_votes = {}
-        for w in living_wolves:
-            prompt = (f"【{self.phase}·狼人落刀·盲投】讨论结束，请暗中决定最终刀人目标。\n狼队讨论：\n{discuss}\n"
-                      f"{WOLF_KILL_TACTICS}\n"
+        for w in wolf_participants:
+            final_note = ("这是你最后一次落刀决策；你已出局，不能把自己视为存活目标。" if w in last_stand_wolves else "")
+            prompt = (f"【{self.phase}·狼人落刀·盲投】讨论结束，请暗中决定最终刀人目标。{final_note}\\n狼队讨论：\\n{discuss}\\n"
+                      f"{WOLF_KILL_TACTICS}\\n"
                       f"当前存活：{self.alive_str()}。只输出严格JSON："
-                      f"{{\"reasoning\":\"落刀理由\",\"vote_target\":X}}，X为要刀的座位号，空刀填0；"
+                      f"{{\\"reasoning\\":\\"落刀理由\\",\\"vote_target\\":X}}，X为要刀的座位号，空刀填0；"
                       f"如执行【自刀】策略可填某个狼队友的座位号(会损失一名狼)。"
                       f"💡偶尔大胆【自刀】(刀掉自己队友)能制造‘悲情金水/真神’假象、骗取好人深度信任，"
                       f"是高风险但极出彩、提升观赏性的操作，局势合适时不妨一试。")
             yield from self._ask(w, prompt, f"{label} 狼人落刀", response_kind="vote")
             vt = self._last_resp.get("vote_target", 0)
-            kill_votes[w] = vt if vt in self.alive_seats() else 0   # 允许自刀：不再排除狼队友
+            kill_votes[w] = vt if vt in self.alive_seats() else 0   # 最后行动狼同样可贡献一票，但只能刀当前存活目标
             self._log_god(f"🐺 狼人（{w}号）落刀 → {'空刀' if not kill_votes[w] else str(kill_votes[w]) + '号'}")
         wolf_kill = self._decide_kill_votes(kill_votes)
         self.night["wolf_kill"] = wolf_kill
@@ -1265,17 +1303,19 @@ class GameEngine:
             self._log_god("🐺 狼队本晚【空刀】，无人被刀。")
         elif wolf_kill in self.wolves:
             note = f"自刀 {wolf_kill}号（骗取好人信任）"
-            for w in living_wolves:
+            for w in wolf_participants:
                 self.manager.inject(w, f"【狼队决议】今晚狼队执行【自刀】，刀了狼队友 {wolf_kill}号。")
             self._log_god(f"🐺 狼队最终目标：【自刀】{wolf_kill}号！")
         else:
             note = f"刀 {wolf_kill}号"
-            for w in living_wolves:
+            for w in wolf_participants:
                 self.manager.inject(w, f"【狼队决议】今晚狼队最终对 {wolf_kill}号 出刀。")
             self._log_god(f"🐺 狼队最终目标：{wolf_kill}号")
         # 写入“夜间作战板”，供上帝视角展示狼队分工与决定
-        self.war_board_recipients = list(living_wolves)
+        self.war_board_recipients = list(wolf_participants)
         self.war_board = {"day": self.day, "discussion": list(wolf_talk), "kill": wolf_kill, "note": note}
+        # 最后行动已完成：自爆者不再拥有狼人私密视角，死后身份可正常开放。
+        self.active_last_stand_wolves = []
 
     # ========================================================
     # 遗言（子生成器）
@@ -1445,9 +1485,22 @@ class GameEngine:
             return
         self.explosion_events.append(event)
 
+    def _schedule_last_stand_wolf(self, seat: int) -> None:
+        """安排白天自爆狼在下一夜参与最后一次狼队讨论与落刀。"""
+        if self.winner or seat not in self.players or self.roles[seat].camp != "狼人":
+            return
+        target_day = self.day + 1
+        if self.pending_wolf_night_day != target_day:
+            self.pending_wolf_night_seats = []
+            self.pending_wolf_night_day = target_day
+        if seat not in self.pending_wolf_night_seats:
+            self.pending_wolf_night_seats.append(seat)
+
     def _handle_election_explode(self, seat, entry_resumed):
         """竞选期间自爆（子生成器）：顺延 或 双爆吞警徽；若自爆者是狼美人则触发殉情连环。"""
         self._mark_dead(seat, "警长竞选自爆")
+        if not self.winner:
+            self._schedule_last_stand_wolf(seat)
         self._confirm_role(seat, self.players[seat]["role"], "公开自爆")
         self._record_explosion(
             seat,
@@ -1734,6 +1787,8 @@ class GameEngine:
 
         # (1) 自爆者出局
         self._mark_dead(s, "白天自爆")   # ★熔断①
+        if not self.winner:
+            self._schedule_last_stand_wolf(s)
         self._confirm_role(s, self.players[s]["role"], "公开自爆")
         self._record_explosion(s, "regular_day", target)
         self._record_event(
@@ -2348,6 +2403,9 @@ class GameEngine:
             "引用公开事件或原话，说明一条主要依据和一个可能反例，再表明倾向。"
             "抱团、孤立、改口和警徽都不能单独定狼；获得新证据可以纠错，也允许合理合作。"
             "公开发动猎枪者是真猎人，技能事实优先于口头身份；自爆只确认本人。"
+            "机制核验：守卫守中狼刀/狼刀空刀，只代表狼刀没有造成死亡，不等于整夜无人死亡；女巫毒药可独立造成死亡。"
+            "因此“守卫守4号、狼刀4号被挡、女巫毒3号”与公开死讯“3号夜死”完全自洽，不得称为机械矛盾或平安夜。"
+            "只有规则或已公开事实确实互斥时，才能指称逻辑矛盾。"
             "技术性未提交不是主动弃权，不得用作躲表态或阵营证据。"
             "狼人只按伪装身份可知道的信息公开发言；私密刀口不可说成全场已知。"
         )
@@ -2374,6 +2432,7 @@ class GameEngine:
                 f"【好人投票】{rec}\n"
                 "先核对本人技能结果和公开结算事实，再评估公开声明，最后才用行为假说。"
                 "多数票、警徽、抱团、孤立及改口不能单独定阵营；允许有依据的合作与纠错。"
+                "机制核验：守卫挡住狼刀不代表平安夜；女巫毒杀可独立造成夜死。守4号挡刀、毒3号且3号夜死是自洽时间线，不是机械矛盾。"
                 "选择最怀疑的合法活人，给出一条可核验依据和一个主要反例，依据不足可主动弃票。"
                 "技术失票、人工跳过不代表玩家躲表态。自爆只确认本人，不认证任何相关人的身份。"
                 "reasoning 用简短依据和结论，不必强制三段长文。"
