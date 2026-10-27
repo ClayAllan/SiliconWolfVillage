@@ -1259,18 +1259,18 @@ class GameEngine:
         for w in wolf_participants:
             mates = [x for x in living_wolves if x != w]
             last_stand_mates = [x for x in last_stand_wolves if x != w]
-            prev_text = "\\n".join(f"{x}号狼：{t}" for x, t in wolf_talk) or "（你是第一个发言的狼）"
+            prev_text = "\n".join(f"{x}号狼：{t}" for x, t in wolf_talk) or "（你是第一个发言的狼）"
             if w in last_stand_wolves:
                 status_note = ("你已因白天自爆出局；按本局规则，你可以参加本夜最后一次狼人讨论与落刀。"
                                "本次行动结束后你彻底退出，不计入存活人数，也不再参与后续夜晚。")
             else:
                 status_note = (f"本夜可参与最后行动的已自爆狼队友：{last_stand_mates}。"
                                "这些队友已出局，只能参与本夜讨论与落刀，不计入存活人数。") if last_stand_mates else ""
-            prompt = (f"【{self.phase}·狼人战术讨论】{status_note}你的存活狼队友：{mates}。当前存活：{self.alive_str()}。\\n"
-                      f"狼队此前发言：\\n{prev_text}\\n"
+            prompt = (f"【{self.phase}·狼人战术讨论】{status_note}你的存活狼队友：{mates}。当前存活：{self.alive_str()}。\n"
+                      f"狼队此前发言：\n{prev_text}\n"
                       f"请和队友简短商量今晚战术与明天分工：刀谁；明天谁【起跳预言家】、谁【倒钩】(伪装好人、混进好人阵营冲票)、"
                       f"谁压身份；是否考虑【自刀】(刀自己人骗取好人信任，高风险慎用)。"
-                      f"原则：稳健、以胜利为目标、别乱玩。\\n{WOLF_KILL_TACTICS}\\n"
+                      f"原则：稳健、以胜利为目标、别乱玩。\n{WOLF_KILL_TACTICS}\n"
                       f"speech输出你的战术建议(50-120字)。")
             yield from self._ask(w, prompt, f"{label} 狼人讨论")
             wolf_talk.append((w, self._last_resp["speech"]))
@@ -1285,10 +1285,10 @@ class GameEngine:
         kill_votes = {}
         for w in wolf_participants:
             final_note = ("这是你最后一次落刀决策；你已出局，不能把自己视为存活目标。" if w in last_stand_wolves else "")
-            prompt = (f"【{self.phase}·狼人落刀·盲投】讨论结束，请暗中决定最终刀人目标。{final_note}\\n狼队讨论：\\n{discuss}\\n"
-                      f"{WOLF_KILL_TACTICS}\\n"
+            prompt = (f"【{self.phase}·狼人落刀·盲投】讨论结束，请暗中决定最终刀人目标。{final_note}\n狼队讨论：\n{discuss}\n"
+                      f"{WOLF_KILL_TACTICS}\n"
                       f"当前存活：{self.alive_str()}。只输出严格JSON："
-                      f"{{\\"reasoning\\":\\"落刀理由\\",\\"vote_target\\":X}}，X为要刀的座位号，空刀填0；"
+                      f'{{"reasoning":"落刀理由","vote_target":X}}，X为要刀的座位号，空刀填0；'
                       f"如执行【自刀】策略可填某个狼队友的座位号(会损失一名狼)。"
                       f"💡偶尔大胆【自刀】(刀掉自己队友)能制造‘悲情金水/真神’假象、骗取好人深度信任，"
                       f"是高风险但极出彩、提升观赏性的操作，局势合适时不妨一试。")
