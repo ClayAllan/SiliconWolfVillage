@@ -311,7 +311,7 @@ with st.sidebar:
     st.caption("选择板子与模型，然后在工作台开始对局。")
     # 🎲 游戏板子选择(V6.4)：开新局/读档前切换，决定本局发什么身份(如含白狼王)。
     _boards = list(config.GAME_BOARDS.keys())
-    human_mode = st.checkbox("🎮 真人入座模式（1 真人 + 11 AI）", value=bool(getattr(ss.engine, "human_seat", None)),
+    human_mode = st.toggle("🎮 真人入座模式（1 真人 + 11 AI）", value=bool(getattr(ss.engine, "human_seat", None)),
                               help="首版仅支持 12 人标准预女猎守板子；真人身份随机分配。")
     human_seat = st.selectbox("真人座位", list(range(1, 13)), index=0,
                               format_func=lambda seat: f"{seat:02d} 号", disabled=not human_mode)
