@@ -407,8 +407,15 @@ class GameEngine:
         self._record_event("vote_result", entry=item)
 
     def _record_reasoning(self, seat, label, reasoning, speech, response=None, request_id=None):
-        item = {"label": label, "reasoning": reasoning, "speech": speech}
-        if response is not None:
+        response = response or {}
+        is_human_action = bool(response.get("_human_action") or response.get("decision_source") == "human")
+        # 安全不变量：真人座位绝不能把模型响应记成自己的行动。
+        # 即使将来有新行动路径绕过 _ask 的真人分支，也必须 fail closed。
+        if seat == self.human_seat and not is_human_action:
+            raise RuntimeError(f"安全保护：真人席位 {seat:02d} 的行动不是由真人提交，已阻止结算（{label}）。")
+        item = {"label": label, "reasoning": reasoning, "speech": speech,
+                "actor_source": "human" if is_human_action else "ai"}
+        if response:
             item["response"] = response
         if request_id:
             item["request_id"] = request_id
@@ -873,6 +880,9 @@ class GameEngine:
             self.pending_human_action = None
             self._pending_human_context = None
         else:
+            # 第二道防线：真人座位不能进入任何 AI 请求路径。
+            if self.human_seat is not None and seat == self.human_seat:
+                raise RuntimeError(f"安全保护：拒绝为真人席位 {seat:02d} 调用 AI。")
             self.manager.set_hard_facts(seat, self._hard_facts_for(seat))
             if hasattr(self.manager, "set_action_context"):
                 self.manager.set_action_context(seat, action_context)
