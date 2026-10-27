@@ -8,6 +8,10 @@ from service.view_projection import project_view, faction_counts
 class ViewProjectionTests(unittest.TestCase):
     def test_each_single_view_only_receives_its_own_identity_and_reasoning(self):
         engine = preview_engine()
+        # This test covers active players; eliminated players intentionally gain full role visibility.
+        for player in engine.players.values():
+            player["alive"] = True
+        engine.winner = None
         engine.war_board = {"day":2,"note":"秘密刀口","discussion":[(1,"秘密讨论")]}
         engine.current_wolf_talk = [(1, "本夜实时队友讨论")]
         for seat in range(1,13):
