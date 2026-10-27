@@ -65,7 +65,7 @@ class HumanSeatTests(unittest.TestCase):
         view = project_view(self.engine, viewer_seat=1)
         self.assertEqual(view.players[2]["role"], "未知")
         self.assertTrue(view.players[2]["alive"])
-        self.assertIsNone(view.role_seats)
+        self.assertEqual(view.role_seats, {})
         self.assertIsNone(view.counts)
 
 
