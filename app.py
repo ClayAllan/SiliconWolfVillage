@@ -219,6 +219,10 @@ def start_game(api_key, base_url, good_model, wolf_model, temperature, agent_tim
     try:
         engine.enable_recording(REPLAY_DIR)
         engine.setup(board_roles)
+        # Setup/发牌完成后再次固定真人座位，避免初始化逻辑变更时覆盖开局配置。
+        engine.human_seat = human_seat
+        if human_seat is not None:
+            config.get_logger().info(f"真人入座模式已启用：{human_seat:02d} 号真人，其余座位由 AI 驱动。")
         service = install_game(engine, automatic=automatic, delay=delay, turbo=turbo)
     except Exception:
         manager.shutdown()
