@@ -608,15 +608,15 @@ owner_replay_playing = owner_panel(st, REPLAY_DIR)
 live_engine = sync_game_state()
 # ---------------- 真人行动面板 ----------------
 if live_engine is not None and getattr(live_engine, "human_seat", None) is not None:
+    private_messages = getattr(live_engine, "human_private_messages", [])
+    if private_messages:
+        with st.expander("你的私密技能结果", expanded=True):
+            for message in private_messages[-8:]:
+                st.write(message)
     pending = getattr(live_engine, "pending_human_action", None)
     if pending and pending.get("seat") == live_engine.human_seat:
         st.subheader("🎮 轮到你行动")
         st.caption(f"{pending.get('label', '当前行动')} · {pending.get('phase', '')} · {pending.get('seat')} 号")
-        private_messages = getattr(live_engine, "human_private_messages", [])
-        if private_messages:
-            with st.expander("你的私密技能结果", expanded=True):
-                for message in private_messages[-8:]:
-                    st.write(message)
         with st.expander("本次行动说明", expanded=False):
             st.write(pending.get("prompt", "请按规则完成当前行动。"))
         kind = pending.get("kind", "speech")
