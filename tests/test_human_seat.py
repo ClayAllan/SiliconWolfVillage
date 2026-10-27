@@ -32,6 +32,15 @@ class HumanSeatTests(unittest.TestCase):
         self.assertEqual(self.engine.reasoning_log[1][-1]["actor_source"], "human")
         self.assertIsNone(self.engine.pending_human_action)
 
+    def test_human_wolf_is_prompted_during_night_pack_discussion(self):
+        # Exercise the actual night path, not only a direct call to _ask().
+        self.engine.human_seat = self.engine.wolves[0]
+        gen = self.engine._run_wolf_pack_night("D1 夜晚")
+        event = next(gen)
+        self.assertEqual(event["type"], "human_input_required")
+        self.assertEqual(self.engine.pending_human_action["seat"], self.engine.human_seat)
+        self.assertIn("狼人讨论", self.engine.pending_human_action["label"])
+
     def test_ai_response_cannot_be_recorded_as_human_action(self):
         with self.assertRaisesRegex(RuntimeError, "真人席位 01"):
             self.engine._record_reasoning(
