@@ -48,6 +48,7 @@ class SpectatorView:
     initial_counts: dict
     viewer_seat: int | None
     feed_issues: tuple = ()
+    human_action: dict | None = None
 
     def alive_seats(self):
         return [seat for seat, player in self.players.items() if player["alive"]]
@@ -72,9 +73,13 @@ def project_view(engine, viewer_seat=None):
     else:
         visible = {viewer_seat}
 
+    # A player's true alive flag changes before a night death is publicly announced.
+    # Limited views must use the published liveness ledger, not internal engine state.
     players = {
         seat: {"role": player["role"] if seat in visible else "未知",
-               "alive": player["alive"], "style": player.get("style", "")}
+               "alive": (player["alive"] if viewer_seat is None
+                         else engine.published_alive.get(seat, True)),
+               "style": player.get("style", "")}
         for seat, player in engine.players.items()
     }
     logs = {
@@ -108,4 +113,8 @@ def project_view(engine, viewer_seat=None):
         role_seats=dict(engine.role_seats) if viewer_seat is None else {},
         counts=faction_counts(engine) if viewer_seat is None else None,
         initial_counts=dict(initial), viewer_seat=viewer_seat, feed_issues=feed_issues,
+        human_action=(deepcopy(engine.pending_human_action)
+                      if viewer_seat is not None
+                      and viewer_seat == getattr(engine, "human_seat", None)
+                      else None),
     )

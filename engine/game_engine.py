@@ -25,6 +25,7 @@ from collections import Counter
 from datetime import datetime
 
 from engine import config
+from agent.model_protocol import parse_action
 from storage.replay_recorder import GameRecorder
 # ★V6.3 角色多态：解析工具与角色类下沉到 roles.py（roles 不反向 import 本模块 → 无循环依赖）
 from engine.roles import create_role, parse_seat, validate_board_roles
@@ -100,6 +101,10 @@ class GameEngine:
         self._active_request_id = None
         self._active_compression_id = None
         self._skip_current = False
+        self.human_seat: int | None = None
+        self.pending_human_action: dict | None = None
+        self._pending_human_context = None
+        self._human_response = None
         self.fatal_error = ""
 
     # ========================================================
@@ -779,6 +784,72 @@ class GameEngine:
             context["allowed_targets"] = sorted(targets)
         return context
 
+    def _ai_seats(self, seats):
+        """Return seats controlled by AI; the human participant never receives model calls."""
+        return [seat for seat in seats if seat != self.human_seat]
+
+    def submit_human_action(self, action_id: str, action: dict) -> bool:
+        """Validate and stage one human action for the currently suspended _ask generator."""
+        pending = self.pending_human_action
+        if self.human_seat is None or pending is None:
+            raise RuntimeError("当前没有等待中的真人行动")
+        if action_id != pending.get("action_id"):
+            raise RuntimeError("行动已过期，请刷新页面后重新操作")
+        if self._human_response is not None:
+            raise RuntimeError("该行动已经提交，不能重复提交")
+        if not isinstance(action, dict):
+            raise ValueError("行动内容必须是对象")
+
+        kind = pending["kind"]
+        allowed_fields = {
+            "speech": {"speech", "is_explode"},
+            "ack": {"speech"},
+            "order": {"speech", "is_explode"},
+            "consolidation": {"speech", "vote_target", "is_explode"},
+            "vote": {"vote_target"},
+            "join_police": {"join_police", "is_explode"},
+            "withdraw": {"withdraw", "is_explode"},
+            "badge_target": {"badge_target"},
+            "antidote": {"use_antidote"},
+            "react_explode": {"is_explode"},
+            "react_duel": {"is_duel", "duel_target"},
+            "check": {"vote_target"},
+            "guard": {"vote_target"},
+            "poison": {"vote_target"},
+            "hunt": {"vote_target"},
+            "charm": {"vote_target"},
+            "dream": {"vote_target"},
+            "link": {"targets"},
+            "swap": {"targets"},
+        }
+        permitted = allowed_fields.get(kind)
+        if permitted is None:
+            raise ValueError(f"暂不支持真人行动类型：{kind}")
+        unexpected = set(action) - permitted
+        if unexpected:
+            raise ValueError("行动包含不允许的字段：" + "、".join(sorted(unexpected)))
+
+        context = self._pending_human_context or {}
+        # Reuse the same protocol/target/skill validation used for model responses.
+        parsed = parse_action(json.dumps(action, ensure_ascii=False), kind, context)
+        parsed.pop("reasoning", None)
+        response = {
+            "reasoning": "真人玩家行动", "speech": "", "vote_target": 0,
+            "is_explode": False, "explode_target": 0, "is_duel": False,
+            "duel_target": 0, "badge_target": 0, "join_police": False,
+            "withdraw": False, "decision_source": "human",
+        }
+        response.update(parsed)
+        if kind == "join_police" and not response.get("speech"):
+            response["speech"] = "决定上警" if response.get("join_police") else "决定不上警"
+        elif kind == "withdraw" and not response.get("speech"):
+            response["speech"] = "决定退水" if response.get("withdraw") else "决定不退水"
+        elif kind == "badge_target" and not response.get("speech"):
+            target = response.get("badge_target", 0)
+            response["speech"] = f"移交警徽给{target}号" if target else "撕毁警徽"
+        self._human_response = response
+        return True
+
     def _public_evidence(self):
         # 公共日志中 role 是全知字段，严禁传入玩家记忆。
         return [{"id": i + 1, "phase": row.get("phase", ""),
@@ -799,7 +870,7 @@ class GameEngine:
         for seat, source in sources.items():
             if source != "model":
                 reason = {"technical_fallback": "技术性未提交", "manual_skip": "人工跳过",
-                          "invalid_target": "无效目标"}.get(source, "未提交")
+                          "invalid_target": "无效目标", "human": "真人玩家"}.get(source, "未提交")
                 detail = re.sub(r"(?<!\d)" + re.escape(f"{seat}号->弃票"),
                                 f"{seat}号->{reason}（不代表主动弃票）", detail)
         return detail
@@ -822,27 +893,48 @@ class GameEngine:
         self.current_speaker = seat
         self.public_speaker = seat if public else None
         self._skip_current = False
-        self.manager.set_hard_facts(seat, self._hard_facts_for(seat))
-        if hasattr(self.manager, "set_action_context"):
-            self.manager.set_action_context(seat, self._action_context(seat, response_kind, allowed_targets))
-        if hasattr(self.manager, "set_public_evidence"):
-            self.manager.set_public_evidence(seat, self._public_evidence())
         config.get_logger().info(f"ASK [{label}] 座位{seat}({self.players[seat]['role']}) kind={response_kind}")
-        request_id = self.manager.submit_ai_response(seat, prompt, response_kind=response_kind)
-        self._active_request_id = request_id
-        yield self._ev("turn", f"{seat}号正在思考…")
 
-        while True:
-            if self._skip_current:
-                resp = self.manager.cancel_ai_response(request_id, "上帝跳过当前玩家")
-                break
-            done, resp = self.manager.poll_ai_response(request_id)
-            if done:
-                break
-            yield self._ev("waiting", f"{seat}号正在思考…（可点击跳过当前玩家）")
-
-        self._active_request_id = None
-        self._skip_current = False
+        if self.human_seat == seat:
+            context = self._action_context(seat, response_kind, allowed_targets)
+            action_id = uuid.uuid4().hex
+            self._pending_human_context = context
+            self._human_response = None
+            self.pending_human_action = {
+                "action_id": action_id, "seat": seat, "kind": response_kind,
+                "label": label, "phase": self.phase, "day": self.day,
+                "public": bool(public),
+                "allowed_targets": list(context.get("allowed_targets") or []),
+                "allowed_flags": list(context.get("allowed_flags") or []),
+                "skill_targets": list(context.get("skill_targets") or []),
+            }
+            request_id = f"human-{action_id}"
+            yield self._ev("human_input_required", f"等待真人玩家{seat}号操作：{label}")
+            while self._human_response is None:
+                yield self._ev("human_waiting", f"等待真人玩家{seat}号提交行动")
+            resp = self._human_response
+            self._human_response = None
+            self.pending_human_action = None
+            self._pending_human_context = None
+        else:
+            self.manager.set_hard_facts(seat, self._hard_facts_for(seat))
+            if hasattr(self.manager, "set_action_context"):
+                self.manager.set_action_context(seat, self._action_context(seat, response_kind, allowed_targets))
+            if hasattr(self.manager, "set_public_evidence"):
+                self.manager.set_public_evidence(seat, self._public_evidence())
+            request_id = self.manager.submit_ai_response(seat, prompt, response_kind=response_kind)
+            self._active_request_id = request_id
+            yield self._ev("turn", f"{seat}号正在思考…")
+            while True:
+                if self._skip_current:
+                    resp = self.manager.cancel_ai_response(request_id, "上帝跳过当前玩家")
+                    break
+                done, resp = self.manager.poll_ai_response(request_id)
+                if done:
+                    break
+                yield self._ev("waiting", f"{seat}号正在思考…（可点击跳过当前玩家）")
+            self._active_request_id = None
+            self._skip_current = False
         self._last_resp = resp
         if resp.get("_is_fallback") and public:
             resp["speech"] = "【技术性未提交发言】" if resp.get("decision_source") != "manual_skip" else "【人工跳过发言】"
@@ -1969,9 +2061,9 @@ class GameEngine:
             # ★ 刷新‘绝对真理层’（当前局势）；并在第2夜起触发【记忆压缩】(滚动摘要)。
             self.manager.set_truth(self._truth_state())
             if self.day >= 2:
-                self._refresh_hard_facts(self.alive_seats())
+                self._refresh_hard_facts(self._ai_seats(self.alive_seats()))
                 self._log_judge(f"🌙 第 {self.day} 夜降临，玩家们正在沉淀思绪（记忆整理中）……")
-                compression_id = self.manager.submit_memory_compression(self.alive_seats())
+                compression_id = self.manager.submit_memory_compression(self._ai_seats(self.alive_seats()))
                 self._active_compression_id = compression_id
                 yield self._ev("compress", "🧠 记忆整理中…")
                 while True:

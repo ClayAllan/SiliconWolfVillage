@@ -137,6 +137,8 @@ def init_state():
     ss.setdefault("preview_mode", False)
     ss.setdefault("viewer_mode", "全知视角")
     ss.setdefault("viewer_seat", 1)
+    ss.setdefault("human_mode_enabled", False)
+    ss.setdefault("human_seat_choice", 1)
     ss.setdefault("engine", None)
     ss.setdefault("running", False)
     ss.setdefault("done", False)
@@ -179,9 +181,13 @@ def sync_game_state():
 
 
 def install_game(engine, *, automatic, delay, turbo=False, generator=None):
+    # Human games are private local sessions: never create shared spectator frames.
+    record_display = (
+        getattr(engine, "human_seat", None) is None
+        and bool(st.session_state.get("enable_sharing", False))
+    )
     service = GameService(engine, REPLAY_DIR, automatic=automatic, delay=delay,
-                          turbo=turbo, generator=generator,
-                          record_display=bool(st.session_state.get("enable_sharing", False)))
+                          turbo=turbo, generator=generator, record_display=record_display)
     receipt = None
     if service.display_replay is not None:
         from service.room_registry import get_registry
@@ -201,7 +207,13 @@ def install_game(engine, *, automatic, delay, turbo=False, generator=None):
 
 def start_game(api_key, base_url, good_model, wolf_model, temperature, agent_timeout,
                board=None, *, automatic=True, delay=0.6, turbo=False,
-               provider_mode="auto", thinking=True, reasoning_effort="low"):
+               provider_mode="auto", thinking=True, reasoning_effort="low", human_seat=None):
+    if human_seat is not None:
+        if type(human_seat) is not int or not 1 <= human_seat <= 12:
+            raise ValueError("真人座位必须是 1—12 号")
+        if board not in (None, config.DEFAULT_BOARD):
+            raise ValueError("真人参战模式仅支持 12人标准预女猎守板子")
+        board = config.DEFAULT_BOARD
     board_roles = config.GAME_BOARDS[board or config.DEFAULT_BOARD]
     config.get_logger().info(f"==== 新游戏开始 板子={board} 好营={good_model} 狼营={wolf_model} "
                              f"单步超时={agent_timeout}s temp={temperature} ====")
@@ -214,6 +226,7 @@ def start_game(api_key, base_url, good_model, wolf_model, temperature, agent_tim
     try:
         engine.enable_recording(REPLAY_DIR)
         engine.setup(board_roles)
+        engine.human_seat = human_seat
         service = install_game(engine, automatic=automatic, delay=delay, turbo=turbo)
     except Exception:
         manager.shutdown()
@@ -283,13 +296,142 @@ def test_connection(api_key, base_url, model, **settings):
         manager.shutdown()
 
 
+def render_human_action(st, service, source_engine, view):
+    """Render only the current human player's whitelisted action, never the AI prompt."""
+    action = getattr(view, "human_action", None)
+    if not action:
+        return
+    seat = int(action["seat"])
+    kind = action["kind"]
+    action_id = action["action_id"]
+    role = source_engine.players[seat]["role"]
+    role_hints = {
+        "平民": "你没有夜间技能；通过公开发言、核验证词和投票帮助好人阵营。",
+        "狼人": "你属于狼人阵营。夜间讨论仅向狼队公开；白天可在合法时机选择自爆。",
+        "预言家": "每晚选择一名其他存活玩家查验，结果只向你本人展示。",
+        "女巫": "解药与毒药每晚最多使用一种；不使用药剂也是合法选择。",
+        "猎人": "被狼刀或放逐时可开枪；被女巫毒杀时不能开枪。",
+        "守卫": "每晚选择一名合法目标守护，也可空守；不能连续两晚守同一人。",
+    }
+    st.markdown("### 🎮 轮到你行动")
+    st.markdown(f"**{seat:02d} 号 · {role} · {action.get('label', kind)}**")
+    st.caption(role_hints.get(role, "请根据当前公开信息和你本人合法获知的技能信息作出选择。"))
+    if kind == "antidote":
+        victim = source_engine.night.get("wolf_kill")
+        if victim:
+            st.info(f"今晚狼队刀口是 {victim} 号。是否使用解药由你决定。")
+        else:
+            st.info("今晚没有已记录的狼刀目标。")
+
+    targets = [int(value) for value in (action.get("allowed_targets") or [])]
+    flags = set(action.get("allowed_flags") or [])
+    payload = {}
+    submit_disabled = False
+    with st.form(key=f"human_action_form_{action_id}"):
+        if kind in {"speech", "consolidation"}:
+            payload["speech"] = st.text_area(
+                "发言内容", height=130,
+                placeholder="输入你的发言。这里不会展示 AI 内部提示词或其他玩家的私密信息。",
+                key=f"human_speech_{action_id}",
+            ).strip()
+        elif kind == "order":
+            payload["speech"] = st.selectbox(
+                "选择发言顺序", ["警左", "警右", "死左", "死右"],
+                key=f"human_order_{action_id}",
+            )
+        elif kind == "ack":
+            st.write("确认收到当前私密信息后提交。")
+            payload["speech"] = "已确认"
+
+        target_kinds = {"vote", "check", "guard", "poison", "hunt", "charm", "dream", "badge_target"}
+        if kind in target_kinds:
+            if not targets:
+                st.warning("当前没有合法目标，暂时无法提交此行动。")
+                submit_disabled = True
+            else:
+                def target_label(target):
+                    if target != 0:
+                        return f"{target:02d} 号"
+                    if kind == "vote":
+                        return "空刀" if "夜" in str(action.get("phase", "")) else "弃票"
+                    return {
+                        "guard": "空守", "poison": "不使用毒药",
+                        "hunt": "不开枪", "badge_target": "撕毁警徽",
+                    }.get(kind, "不执行技能")
+                field = "badge_target" if kind == "badge_target" else "vote_target"
+                payload[field] = st.selectbox(
+                    "选择目标", targets, format_func=target_label,
+                    key=f"human_target_{action_id}",
+                )
+        elif kind == "antidote":
+            payload["use_antidote"] = st.checkbox(
+                "使用解药", value=False, key=f"human_antidote_{action_id}",
+            )
+        elif kind == "join_police":
+            payload["join_police"] = st.checkbox(
+                "上警竞选警长", value=False, key=f"human_join_{action_id}",
+            )
+        elif kind == "withdraw":
+            payload["withdraw"] = st.checkbox(
+                "退水，退出警长竞选", value=False, key=f"human_withdraw_{action_id}",
+            )
+        elif kind == "react_explode":
+            payload["is_explode"] = st.checkbox(
+                "立即自爆并结束本白天", value=False, key=f"human_explode_{action_id}",
+            )
+        elif kind == "react_duel":
+            payload["is_duel"] = st.checkbox(
+                "立即发动骑士决斗", value=False, key=f"human_duel_{action_id}",
+            )
+            if payload["is_duel"]:
+                if targets:
+                    payload["duel_target"] = st.selectbox(
+                        "决斗目标", targets, key=f"human_duel_target_{action_id}",
+                    )
+                else:
+                    st.warning("当前没有合法决斗目标。")
+                    submit_disabled = True
+        elif kind in {"link", "swap"}:
+            if len(targets) < 2:
+                st.warning("当前没有足够的合法目标。")
+                submit_disabled = True
+            else:
+                first = st.selectbox("第一个目标", targets, key=f"human_target_a_{action_id}")
+                second_options = [target for target in targets if target != first]
+                second = st.selectbox("第二个目标", second_options, key=f"human_target_b_{action_id}")
+                payload["targets"] = [first, second]
+        elif kind not in {"speech", "consolidation", "order", "ack", "antidote",
+                          "join_police", "withdraw", "react_explode", "react_duel",
+                          "link", "swap"} and kind not in target_kinds:
+            st.error(f"暂不支持的真人行动类型：{kind}")
+            submit_disabled = True
+
+        if "is_explode" in flags and kind in {"speech", "consolidation", "order", "join_police", "withdraw"}:
+            payload["is_explode"] = st.checkbox(
+                "狼人自爆（立即结束本白天）", value=False, key=f"human_explode_{action_id}",
+            )
+        submitted = st.form_submit_button("提交行动", type="primary", use_container_width=True,
+                                          disabled=submit_disabled)
+    if submitted:
+        try:
+            service.submit_human_action(action_id, payload)
+            st.rerun()
+        except (ValueError, RuntimeError) as error:
+            st.error(f"行动未提交：{error}")
+
+
 # ============================================================
 # 主流程
 # ============================================================
 init_state()
 engine = sync_game_state()
 ss = st.session_state
-single_view = ss.viewer_mode == "单一视角"
+human_mode = bool(engine and getattr(engine, "human_seat", None) is not None)
+if human_mode:
+    # A live human game must never expose the omniscient view or allow seat switching.
+    ss.viewer_mode = "单一视角"
+    ss.viewer_seat = engine.human_seat
+single_view = human_mode or ss.viewer_mode == "单一视角"
 
 # 热更新兼容：若修改代码前已有一局刚结束但尚未落盘，在当前会话下一次 rerun 时补归档。
 if engine is not None and ss.done and not ss.last_archive and not ss.archive_error:
@@ -300,11 +442,28 @@ if engine is not None and ss.done and not ss.last_archive and not ss.archive_err
 with st.sidebar:
     st.markdown("### 对局设置")
     st.caption("选择板子与模型，然后在工作台开始对局。")
-    # 🎲 游戏板子选择(V6.4)：开新局/读档前切换，决定本局发什么身份(如含白狼王)。
+    human_mode_enabled = st.checkbox(
+        "真人参战模式（1 人 + 11 名 AI）",
+        key="human_mode_enabled",
+        help="真人与 11 名 AI 同桌完整对局；首版固定标准预女猎守板子，并锁定玩家视角。",
+    )
+    if human_mode_enabled and ss.get("enable_sharing", False):
+        # This happens before the sharing widget is created in this rerun.
+        ss.enable_sharing = False
+    human_seat_choice = st.selectbox(
+        "真人座位", list(range(1, 13)), key="human_seat_choice",
+        format_func=lambda seat: f"{seat:02d} 号",
+        disabled=not human_mode_enabled,
+    )
+    # 🎲 真人模式固定标准板子；AI 观战模式仍保留全部已有板子。
     _boards = list(config.GAME_BOARDS.keys())
     board = st.selectbox("🎲 游戏板子", _boards,
                          index=_boards.index(config.DEFAULT_BOARD) if config.DEFAULT_BOARD in _boards else 0,
-                         help="开新局点【开始新游戏】时生效；不同板子=不同身份配置。")
+                         disabled=human_mode_enabled,
+                         help="真人参战模式首版固定使用 12人标准预女猎守板子。")
+    if human_mode_enabled:
+        board = config.DEFAULT_BOARD
+        st.caption("真人模式：12 人标准预女猎守（4 狼、4 民、预女猎守各 1）。")
     default_key = ""  # Public visitors always supply their own key.
     api_key = st.text_input("DeepSeek API Key", value=default_key, type="password",
                             help="填写你自己的 API Key；请求由托管服务器转发给所选模型服务。")
@@ -352,7 +511,8 @@ with st.sidebar:
     )
 
     st.checkbox("共享观战与回放记录（仅新建对局生效）", key="enable_sharing", value=False,
-                disabled=ss.game_service is not None, help="额外记录按视角过滤的展示帧；不额外调用模型。默认关闭。")
+                disabled=ss.game_service is not None or human_mode_enabled,
+                help="额外记录按视角过滤的展示帧；不额外调用模型。真人模式强制关闭共享记录。")
 
     if ss.game_service is not None:
         ss.game_service.configure(automatic=auto, delay=delay, turbo=is_turbo, react_budget=react_budget)
@@ -497,8 +657,11 @@ with st.sidebar:
     with st.expander("💾 存档 / 读档"):
         st.caption("先暂停再保存；若仍在等待玩家，单步收集已完成的响应或跳过当前玩家后再保存。")
         if engine:
-            _busy = bool(auto_running or engine.has_pending_action() or engine.manager.has_pending())
-            if st.button("💾 保存当前进度", use_container_width=True, disabled=_busy):
+            _busy = bool(auto_running or engine.has_pending_action() or engine.manager.has_pending()
+                         or getattr(engine, "pending_human_action", None))
+            if human_mode:
+                st.caption("真人模式首版暂不支持存档/读档恢复，以避免丢失待处理行动。")
+            if st.button("💾 保存当前进度", use_container_width=True, disabled=_busy or human_mode):
                 try:
                     nm = ss.game_service.save(SAVE_DIR)
                     st.success(f"已存档：{nm}")
@@ -591,13 +754,19 @@ with st.container(key="playback"):
     overview_slot = st.empty()
     with st.container(key="view_controls"):
         mode_col, seat_col, theme_col = st.columns([1.3,1,1.2])
-        mode_col.radio("观战视角", ["全知视角", "单一视角"], horizontal=True, key="viewer_mode")
+        if human_mode:
+            mode_col.markdown("**真人玩家视角（已锁定）**")
+        else:
+            mode_col.radio("观战视角", ["全知视角", "单一视角"], horizontal=True, key="viewer_mode")
         seat_col.selectbox("代入席位", list(range(1,13)), key="viewer_seat",
-                           format_func=lambda seat: f"{seat:02d} 号", disabled=not single_view)
+                           format_func=lambda seat: f"{seat:02d} 号",
+                           disabled=not single_view or human_mode)
         theme_col.markdown("**外观主题**")
         theme_col.caption("右上角 ⋮ → Theme；Light 浅色 / Dark 深色 / System 跟随系统")
         reveal_counts = st.checkbox("显示全知阵营人数", value=False, key="reveal_factions",
-                                    help="显示真实剩余阵营人数，可能通过人数变化推断出局者阵营。") if single_view else False
+                                    help="显示真实剩余阵营人数，可能通过人数变化推断出局者阵营。") if single_view and not human_mode else False
+    live_engine = sync_game_state()
+    human_waiting = bool(live_engine and getattr(live_engine, "pending_human_action", None))
     start_col, pause_col, step_col, skip_col, reset_col, demo_col = st.columns([1.3,1,1,1.4,1,1.4])
     if start_col.button("🎬 开始新游戏", use_container_width=True, type="primary"):
         if not api_key or api_key.startswith("sk-请"):
@@ -606,18 +775,21 @@ with st.container(key="playback"):
             try:
                 start_game(api_key, base_url, good_model, wolf_model, temperature, agent_timeout, board,
                            automatic=auto, delay=delay, turbo=is_turbo,
-                           provider_mode=provider_mode, thinking=thinking, reasoning_effort=reasoning_effort)
+                           provider_mode=provider_mode, thinking=thinking, reasoning_effort=reasoning_effort,
+                           human_seat=human_seat_choice if human_mode_enabled else None)
                 st.rerun()
             except (ValueError, RuntimeError) as error:
                 st.error(str(error))
     pause_label = "⏸️ 暂停" if ss.running else "▶️ 继续"
-    if pause_col.button(pause_label, use_container_width=True, disabled=live_engine is None or ss.done):
+    if pause_col.button(pause_label, use_container_width=True,
+                         disabled=live_engine is None or ss.done or human_waiting):
         if ss.running:
             ss.game_service.pause()
         else:
             ss.game_service.play()
         st.rerun()
-    if step_col.button("⏭️ 单步", use_container_width=True, disabled=live_engine is None or ss.done or auto_running):
+    if step_col.button("⏭️ 单步", use_container_width=True,
+                        disabled=live_engine is None or ss.done or auto_running or human_waiting):
         advance_step()
         st.rerun()
     can_skip = bool(live_engine and not ss.done and live_engine.has_pending_action())
@@ -665,7 +837,11 @@ elif engine:
 else:
     lines.append("首次使用：左上角展开对局设置 → 填写 API Key → 开始新游戏。也可先查看零 API 示例。")
 
-if single_view:
+if human_mode:
+    lines.append(f"真人玩家：{ss.viewer_seat:02d} 号；只能查看自身身份、合法技能信息和公开动态。")
+if human_waiting:
+    lines.append("轮到你行动：请在圆桌现场提交本回合操作。")
+elif single_view:
     lines.append(f"当前代入 {ss.viewer_seat:02d} 号：展示自己的身份、技能与推理；狼人还可查看队友身份和作战板，其他私密信息隐藏。")
 
 if live_engine and ss.running and ss.advancing_since:
@@ -684,6 +860,8 @@ with st.container(key="workspace"):
     with arena_col:
         st.markdown('<div class="wv-section">圆桌现场 <small>ARENA / 席位与行动</small></div>', unsafe_allow_html=True)
         st.markdown(design.stage(players, current, selected=ss.sel_seat, sheriff=sheriff, engine=engine), unsafe_allow_html=True)
+        if human_mode and engine and getattr(engine, "human_action", None):
+            render_human_action(st, ss.game_service, live_engine, engine)
         if engine:
             st.markdown(design.factions(engine, reveal_counts=faction_counts(source_engine) if single_view and reveal_counts else None), unsafe_allow_html=True)
         else:

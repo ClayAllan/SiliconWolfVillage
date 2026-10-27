@@ -93,6 +93,11 @@ class GameService:
         with self._condition:
             if self._closed or self._done:
                 return
+            if (getattr(self._engine, "pending_human_action", None)
+                    and getattr(self._engine, "_human_response", None) is None):
+                self._running = False
+                self._status = f"等待真人玩家{self._engine.human_seat}号操作"
+                return
             if not self._publish_display():
                 return
             self._error = ""
@@ -154,9 +159,32 @@ class GameService:
         with self._condition:
             if self._closed or self._done:
                 return False
+            if (getattr(self._engine, "pending_human_action", None)
+                    and getattr(self._engine, "_human_response", None) is None):
+                return False
             if self._running and self._automatic:
                 raise RuntimeError("请先暂停自动推演再单步")
             return self._advance_locked()
+
+    def submit_human_action(self, action_id, action):
+        """Submit a validated human response and resume according to the current pacing mode."""
+        with self._condition:
+            if self._closed or self._done:
+                raise RuntimeError("对局已结束，无法提交真人行动")
+            if not getattr(self._engine, "pending_human_action", None):
+                raise RuntimeError("当前没有等待中的真人行动")
+            self._engine.submit_human_action(action_id, action)
+            self.revision += 1
+            # Consume the suspended _ask once so the form closes immediately and the
+            # engine records the action before automatic/manual progression resumes.
+            self._advance_locked()
+            if self._automatic and not self._closed and not self._done:
+                self._error = ""
+                self._running = True
+                self._next_due = 0.0
+                self._ensure_worker_locked()
+            self._condition.notify_all()
+            return self._last_event_type
 
     def request_skip_current(self):
         with self._condition:
@@ -198,6 +226,8 @@ class GameService:
         with self._condition:
             if self._closed:
                 raise RuntimeError("对局已关闭")
+            if getattr(self._engine, "human_seat", None) is not None:
+                raise RuntimeError("真人模式首版暂不支持存档/读档恢复")
             if (self._running and self._automatic) or self._engine.manager.has_pending():
                 raise RuntimeError("请先暂停并等待后台任务完成后再存档")
             target_dir = Path(directory)
@@ -234,6 +264,9 @@ class GameService:
             if self._generator is not None:
                 self._generator.close()
                 self._generator = None
+            self._engine.pending_human_action = None
+            self._engine._pending_human_context = None
+            self._engine._human_response = None
             self._archive_locked(reason)
             if hasattr(self._engine.manager, "shutdown"):
                 self._engine.manager.shutdown()
@@ -289,6 +322,9 @@ class GameService:
             self.revision += 1
             self._last_event_type = event.get("type", "")
             self._status = event.get("status", "")
+            if self._last_event_type == "human_input_required":
+                self._running = False
+                self._status = event.get("status", "等待真人玩家操作")
             if self._last_event_type in {"turn", "compress"}:
                 self._waiting_since = time.time()
             elif self._last_event_type not in {"waiting", "compress_waiting"}:
