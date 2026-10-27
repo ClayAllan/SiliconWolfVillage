@@ -158,6 +158,25 @@ class GameService:
                 raise RuntimeError("请先暂停自动推演再单步")
             return self._advance_locked()
 
+    def submit_human_action(self, action_id, payload):
+        """校验并提交真人行动；提交后按当前自动/手动模式恢复推进。"""
+        with self._condition:
+            if self._closed or self._done:
+                raise RuntimeError("对局已结束，无法提交行动")
+            if not getattr(self._engine, "pending_human_action", None):
+                raise RuntimeError("当前没有等待中的真人行动")
+            self._engine.submit_human_action(action_id, payload)
+            self.revision += 1
+            self._error = ""
+            self._condition.notify_all()
+            if self._automatic:
+                self._running = True
+                self._next_due = 0.0
+                self._ensure_worker_locked()
+            else:
+                self._advance_locked()
+            return True
+
     def request_skip_current(self):
         with self._condition:
             if self._closed or self._done or not self._engine.request_skip_current():
@@ -289,6 +308,10 @@ class GameService:
             self.revision += 1
             self._last_event_type = event.get("type", "")
             self._status = event.get("status", "")
+            if self._last_event_type == "human_input_required":
+                # 不能持锁等待浏览器输入；暂停自动推进，提交行动后再唤醒。
+                self._running = False
+                self._waiting_since = 0.0
             if self._last_event_type in {"turn", "compress"}:
                 self._waiting_since = time.time()
             elif self._last_event_type not in {"waiting", "compress_waiting"}:
