@@ -766,6 +766,9 @@ class GameEngine:
         response["_human_action"] = True
         response["decision_source"] = "human"
         self._last_resp = response
+        # 一旦成功提交立即消费请求令牌，阻止重复点击覆盖已提交动作。
+        self.pending_human_action = None
+        self._pending_human_context = None
         return True
 
     # ========================================================
