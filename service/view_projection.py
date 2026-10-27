@@ -74,7 +74,10 @@ def project_view(engine, viewer_seat=None):
 
     players = {
         seat: {"role": player["role"] if seat in visible else "未知",
-               "alive": player["alive"], "style": player.get("style", "")}
+               "alive": (player["alive"] if viewer_seat is None or seat == viewer_seat
+                         or getattr(engine, "human_seat", None) is None
+                         else getattr(engine, "published_alive", {}).get(seat)),
+               "style": player.get("style", "")}
         for seat, player in engine.players.items()
     }
     logs = {
