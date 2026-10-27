@@ -29,7 +29,14 @@ class HumanSeatTests(unittest.TestCase):
         event = next(gen)
         self.assertEqual(event["type"], "done")
         self.assertEqual(self.engine.reasoning_log[1][-1]["speech"], "我先说明判断依据。")
+        self.assertEqual(self.engine.reasoning_log[1][-1]["actor_source"], "human")
         self.assertIsNone(self.engine.pending_human_action)
+
+    def test_ai_response_cannot_be_recorded_as_human_action(self):
+        with self.assertRaisesRegex(RuntimeError, "真人席位 01"):
+            self.engine._record_reasoning(
+                1, "D1 警下投票", "AI生成的理由", "（暗投：2号）",
+                response={"reasoning": "AI生成的理由", "vote_target": 2}, request_id="ai-request")
 
     def test_stale_or_duplicate_action_is_rejected(self):
         gen = self.engine._ask(1, "prompt", "D1 投票", response_kind="vote")
@@ -58,6 +65,24 @@ class HumanSeatTests(unittest.TestCase):
                 pending = service.snapshot().engine.pending_human_action
                 self.assertTrue(service.submit_human_action(pending["action_id"], {"speech": "提交发言。"}))
                 self.assertEqual(service.snapshot().last_event_type, "done")
+            finally:
+                service.close()
+
+    def test_service_pauses_if_human_seat_has_an_ai_action_in_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.engine.reasoning_log[1].append({
+                "label": "D1 警下投票", "reasoning": "AI生成的理由",
+                "speech": "（暗投：2号）",
+                "response": {"reasoning": "AI生成的理由", "vote_target": 2},
+            })
+            service = GameService(self.engine, directory, automatic=False,
+                                  generator=self.engine._ask(2, "prompt", "D1 发言"))
+            try:
+                self.assertFalse(service.step())
+                snapshot = service.snapshot()
+                self.assertIn("真人席位 01", snapshot.error)
+                self.assertFalse(snapshot.running)
+                self.assertEqual(snapshot.last_event_type, "human_action_integrity_error")
             finally:
                 service.close()
 
