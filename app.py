@@ -857,5 +857,20 @@ footer_slot.markdown('<div class="wv-footer"><span>SILICON WOLF VILLAGE · 让�
 
 # 每次完整页面正常结束，框架才能清除旧局节点。定时片段只安排下一次刷新。
 # 保留完整页面刷新，让侧栏用量、诊断与主视图一起更新；片段自身不推进对局。
-schedule_page_refresh(st, bool(owner_replay_playing or (live_engine and ss.running and not ss.done and auto)),
-                      0.75 if owner_replay_playing else AUTO_POLL_SECONDS)
+# 真人模式下持续轮询，直到快照确认真人待处理行动已出现；否则后台刚进入真人回合时，
+# 若页面上一轮已看到 running=False，可能停止刷新，导致输入面板一直不显示。
+human_waiting_for_snapshot = bool(
+    live_engine is not None
+    and getattr(live_engine, "human_seat", None) is not None
+    and not ss.done
+    and ss.game_service is not None
+    and live_engine.players.get(live_engine.human_seat, {}).get("alive", False)
+    and getattr(live_engine, "pending_human_action", None) is None
+    and auto
+)
+schedule_page_refresh(
+    st,
+    bool(owner_replay_playing or (live_engine and ss.running and not ss.done and auto)
+         or human_waiting_for_snapshot),
+    0.75 if owner_replay_playing else AUTO_POLL_SECONDS,
+)
