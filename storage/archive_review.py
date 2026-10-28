@@ -151,13 +151,15 @@ def load_archive_review(root, directory) -> dict:
             if not isinstance(metric, dict):
                 continue
             value = metric.get("value")
-            if value is not None and type(value) not in (int, float):
+            if value is not None and (
+                type(value) not in (int, float) or not 0 <= value <= 1
+            ):
                 value = None
             observed[str(key)[:80]] = {
                 "label": _bounded_text(metric.get("label", key), 100),
                 "value": value,
-                "numerator": metric.get("numerator") if type(metric.get("numerator")) is int else None,
-                "denominator": metric.get("denominator") if type(metric.get("denominator")) is int else None,
+                "numerator": metric.get("numerator") if type(metric.get("numerator")) is int and metric["numerator"] >= 0 else None,
+                "denominator": metric.get("denominator") if type(metric.get("denominator")) is int and metric["denominator"] >= 0 else None,
                 "definition": _bounded_text(metric.get("definition", ""), 400),
             }
 
