@@ -26,6 +26,7 @@ def add_manifest(root, name, *, game_id, status="completed", quality="valid",
         "source_snapshot": {
             "runtime": {"version_id": source_id},
             "files": {"config.py": "cfg-" + source_id, "game_engine.py": "engine-" + source_id,
+                      "game_archive.py": "archive-" + source_id,
                       "ai_agent.py": "agent-" + source_id, "roles.py": "roles-" + source_id},
             "prompts": {"system_template_sha256": "system-" + source_id,
                         "summary_template_sha256": "summary-" + source_id},
