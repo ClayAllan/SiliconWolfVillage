@@ -81,6 +81,27 @@ class ArchiveReviewTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "超过读取上限"):
                 load_archive_review(root, directory)
 
+
+    def test_event_window_is_capped_and_returns_truncation_notice(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as root:
+            directory = write_archive(root)
+            rows = [
+                {"seq": i, "timestamp": f"t{i}", "event": "public_log",
+                 "entry": {"kind": "player", "phase": "第1天", "seat": 1, "text": f"事件{i}"}}
+                for i in range(1, 7)
+            ]
+            (directory / "events.jsonl").write_text(
+                "".join(json.dumps(row, ensure_ascii=False) + "\\n" for row in rows),
+                encoding="utf-8",
+            )
+            with patch("storage.archive_review.MAX_REVIEW_EVENTS", 3):
+                result = load_archive_review(root, directory)
+            self.assertEqual([row["seq"] for row in result["events"]], [4, 5, 6])
+            self.assertTrue(result["events_truncated"])
+            self.assertIn("有界事件窗口", result["issue"])
+
     def test_missing_events_is_a_review_warning_not_a_hard_failure(self):
         with tempfile.TemporaryDirectory() as root:
             directory = write_archive(root)
