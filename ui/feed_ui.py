@@ -1,7 +1,7 @@
 """对局动态的有界容器与定向滚动控件。"""
 import json
 
-from service.live_feed import feed_identity, prepare_feed_state, request_scroll, unread_events
+from service.live_feed import feed_identity, prepare_feed_state, request_scroll, select_feed_window
 
 
 def scroll_script(identity, command, sequence):
@@ -49,20 +49,18 @@ def render_feed(st, engine, render_entry, empty_html, *, show_god, full_history,
                        on_click=request_scroll, args=(state, "bottom"))
     controls[2].button("⬆️ 顶部", key="feed_top", use_container_width=True,
                        on_click=request_scroll, args=(state, "top"))
-    rows = [r for r in engine.public_log if show_god or r.get("kind") != "god"] if engine else []
-    if channel == "玩家发言":
-        rows = [r for r in rows if r.get("kind") == "player"]
-    elif channel == "法官播报":
-        rows = [r for r in rows if r.get("kind") in {"judge", "win", "votechart"}]
-    unseen = unread_events(state, rows)
+    source_rows = engine.public_log if engine else []
+    visible, unseen, truncated, tail = select_feed_window(
+        state, source_rows, show_god=show_god, channel=channel,
+        full_history=full_history, limit=limit,
+    )
     following = state["feed_follow_latest"]
     status = "正在跟随最新" if following else f"已暂停跟随 · {unseen} 条新动态"
     st.caption(status + (f" · 对局 {game_id[:8]}" if engine else ""))
-    visible = rows if full_history else rows[-max(1, int(limit)):]
     with st.container(height=480, border=True, key=identity, autoscroll=following):
         # 两个槽位始终存在，90条阈值切换不会改变正文的位置。
         notice, content = st.empty(), st.empty()
-        if len(rows) > len(visible):
+        if truncated:
             notice.caption(f"仅展示最近 {len(visible)} 条；完整内容保存在本局归档。")
         else:
             notice.empty()
@@ -76,8 +74,7 @@ def render_feed(st, engine, render_entry, empty_html, *, show_god, full_history,
         # 原生 autoscroll 会在手动上翻后停止粘底。显式跟随模式在新事件到达时
         # 恢复到底部，游标也覆盖最近90条窗口长度不再增长的情况。
         action = "bottom"
-        tail = rows[-1].get("event_seq", len(rows)) if rows else 0
-        sequence = f"follow:{sequence}:{tail}:{len(rows)}:{len(visible)}"
+        sequence = f"follow:{sequence}:{tail}:{len(visible)}"
     if action:
         with command_slot:
             st.html(scroll_script(identity, action, sequence),

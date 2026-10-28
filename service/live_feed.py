@@ -55,6 +55,59 @@ def unread_events(state, rows):
     return sum(r["event_seq"] > state.get("_feed_seen_seq", 0) for r in rows)
 
 
+def select_feed_window(state, rows, *, show_god, channel, full_history, limit=90):
+    """Select visible events from the tail without filtering the full log on every refresh.
+
+    Event sequence numbers are monotonic within a game. For the bounded live view,
+    scan newest-to-oldest until the visible window and unread cursor are both resolved.
+    """
+    def matches(row):
+        if not show_god and row.get("kind") == "god":
+            return False
+        if channel == "玩家发言":
+            return row.get("kind") == "player"
+        if channel == "法官播报":
+            return row.get("kind") in {"judge", "win", "votechart"}
+        return True
+
+    if full_history:
+        visible = [row for row in rows if matches(row)]
+        unseen = unread_events(state, visible)
+        tail = visible[-1].get("event_seq", len(visible)) if visible else 0
+        return visible, unseen, False, tail
+
+    cap = max(1, int(limit))
+    follow = bool(state.get("feed_follow_latest"))
+    mark_seen = state.pop("_feed_mark_seen", False)
+    seen_before = int(state.get("_feed_seen_seq", 0) or 0)
+    selected_reversed = []
+    unseen = 0
+    tail = 0
+    truncated = False
+
+    for index in range(len(rows) - 1, -1, -1):
+        row = rows[index]
+        if not matches(row):
+            continue
+        seq = int(row.get("event_seq", index + 1))
+        if not tail:
+            tail = seq
+        if len(selected_reversed) < cap:
+            selected_reversed.append(row)
+        else:
+            truncated = True
+        if not follow and not mark_seen and seq > seen_before:
+            unseen += 1
+        if len(selected_reversed) > cap and (follow or mark_seen or seq <= seen_before):
+            break
+
+    visible = list(reversed(selected_reversed[:cap]))
+    if follow or mark_seen:
+        state["_feed_seen_seq"] = tail
+        unseen = 0
+    return visible, unseen, truncated, tail
+
+
 def schedule_page_refresh(st, enabled, interval):
     """首次调用正常返回，让整页完成清理；后续定时tick才请求下一次完整刷新。"""
     first_call = True
