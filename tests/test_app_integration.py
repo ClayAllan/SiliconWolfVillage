@@ -418,7 +418,7 @@ class AppIntegrationTests(unittest.TestCase):
             json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
         )
         (archive / "summary.md").write_text(
-            "# 私密复盘摘要\n仅供房主查看", encoding="utf-8"
+            "# 私密复盘摘要\\n仅供房主查看", encoding="utf-8"
         )
         events = [
             {
@@ -440,7 +440,7 @@ class AppIntegrationTests(unittest.TestCase):
             },
         ]
         (archive / "events.jsonl").write_text(
-            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in events),
+            "".join(json.dumps(row, ensure_ascii=False) + "\\n" for row in events),
             encoding="utf-8",
         )
 
@@ -450,7 +450,7 @@ class AppIntegrationTests(unittest.TestCase):
 
         self.assertTrue(any("验收测试板 · 好人" in item.value for item in self.app.subheader))
         self.assertTrue(any(item.label == "总 Token" and item.value == "123" for item in self.app.metric))
-        rendered = "\n".join(
+        rendered = "\\n".join(
             [item.value for item in self.app.markdown]
             + [item.value for item in self.app.text]
         )
