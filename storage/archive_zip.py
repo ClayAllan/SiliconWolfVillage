@@ -127,10 +127,10 @@ def build_private_archive_zip(replay_root, archive_directory) -> bytes:
                             remaining -= len(chunk)
             dest.writestr(
                 f"{selected.name}/PRIVATE_ARCHIVE_NOTICE.txt",
-                "硅基狼村私密历史对局归档\\n"
+                "硅基狼村私密历史对局归档\n"
                 "此文件包含真实身份、AI 记忆及可能的私密对局记录，"
-                "仅供对局所有者保存和授权分析；不得作为公开观战包传播。\\n"
-                "仅包含该局标准归档文件，不包含其他局的 index.csv 或 API Key。\\n",
+                "仅供对局所有者保存和授权分析；不得作为公开观战包传播。\n"
+                "仅包含该局标准归档文件，不包含其他局的 index.csv 或 API Key。\n",
             )
     except (OSError, zipfile.BadZipFile) as error:
         raise ValueError("生成归档 ZIP 失败，请检查文件是否仍可读取") from error
