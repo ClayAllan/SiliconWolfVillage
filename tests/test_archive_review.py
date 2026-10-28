@@ -93,7 +93,7 @@ class ArchiveReviewTests(unittest.TestCase):
                 for i in range(1, 7)
             ]
             (directory / "events.jsonl").write_text(
-                "".join(json.dumps(row, ensure_ascii=False) + "\\n" for row in rows),
+                "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
                 encoding="utf-8",
             )
             with patch("storage.archive_review.MAX_REVIEW_EVENTS", 3):
