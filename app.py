@@ -16,6 +16,7 @@ from service.view_projection import project_view, faction_counts, project_api_he
 from agent.model_protocol import ERROR_LABELS
 from storage.session_storage import storage_paths
 from storage.save_package import store_uploaded_save, MAX_SAVE_PACKAGE_BYTES
+from storage.archive_zip import build_private_archive_zip, recent_archive_directories
 from agent.ai_agent import AgentManager
 from storage.game_archive import game_statistics
 from engine.game_engine import GameEngine
@@ -574,6 +575,58 @@ with st.sidebar:
                         )
             else:
                 st.caption("开始游戏后可导出本局复盘。")
+
+        # Historical archives may outlive the currently active game in this session.
+        # Room spectators stop above in the read-only route; live human seats do not
+        # receive the all-roles/private archive until their game has ended.
+        if not single_view or ss.done:
+            st.divider()
+            _history_archives = recent_archive_directories(REPLAY_DIR)
+            st.markdown("**📦 历史对局归档 ZIP（仅供私人保存）**")
+            if not _history_archives:
+                st.caption("当前浏览器会话尚无可导出的历史归档。完整对局结束后会自动生成；也可选择以前已归档的对局。")
+            else:
+                _selected_history = st.selectbox(
+                    "选择需要下载的历史对局",
+                    _history_archives, format_func=lambda path: path.name,
+                    key="archive_zip_selected",
+                )
+                st.warning(
+                    "此 ZIP 包含真实身份、AI 私密记忆、原始事件与可能的请求诊断。"
+                    "只建议自行保存或提供给受信任的分析者，切勿公开传播。"
+                )
+                _zip_agree = st.checkbox(
+                    "我了解这是一份包含私密信息的完整归档",
+                    key="archive_zip_private_acknowledged",
+                )
+                if st.button(
+                    "📦 生成历史对局归档 ZIP",
+                    use_container_width=True,
+                    disabled=auto_running or not _zip_agree,
+                    key="prepare_archive_zip",
+                    help="显式生成，避免页面每次自动刷新时重复压缩历史记录。",
+                ):
+                    ss.pop("prepared_archive_zip", None)
+                    try:
+                        _zip_data = build_private_archive_zip(REPLAY_DIR, _selected_history)
+                        ss["prepared_archive_zip"] = {
+                            "source": str(_selected_history),
+                            "data": _zip_data,
+                        }
+                        st.success(f"私密归档已准备好：{len(_zip_data) / 1024 / 1024:.2f} MiB")
+                    except (OSError, ValueError) as _zip_error:
+                        st.error(f"无法生成历史归档 ZIP：{_zip_error}")
+                _prepared = ss.get("prepared_archive_zip")
+                if _prepared and _prepared.get("source") == str(_selected_history) and _zip_agree:
+                    st.download_button(
+                        "⬇️ 下载历史对局归档 ZIP",
+                        data=_prepared["data"],
+                        file_name=f"硅基狼村-历史归档-{_selected_history.name}.zip",
+                        mime="application/zip", on_click="ignore",
+                        key="download_archive_zip", use_container_width=True,
+                    )
+        elif engine is not None:
+            st.caption("真人对局尚未结束，暂不可导出包含全部私密记录的 ZIP。")
 
     # ===== 💾 存档 / 读档（V6.0）=====
     with st.expander("💾 存档 / 读档"):

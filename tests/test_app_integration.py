@@ -389,6 +389,61 @@ class AppIntegrationTests(unittest.TestCase):
         get_registry().release(room, owner)
 
 
+    def test_private_archive_zip_download_requires_owner_consent(self):
+        import io
+        import zipfile
+
+        archived = self.replays / "20261029_zip_fixture"
+        archived.mkdir()
+        (archived / "manifest.json").write_text(
+            json.dumps({"metadata": {"game_id": "offline-zip", "status": "completed"}}),
+            encoding="utf-8",
+        )
+        (archived / "final_state.json").write_text(
+            json.dumps({"reasoning_log": {"1": "PRIVATE_ONLY"}}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (archived / "events.jsonl").write_text('{"event":"public_log"}\\n', encoding="utf-8")
+        self.app.run()
+        self.assert_clean()
+        prepare = next(
+            item for item in self.app.button
+            if item.label == "📦 生成历史对局归档 ZIP"
+        )
+        self.assertTrue(prepare.disabled)
+        self.assertFalse(any(
+            item.label == "⬇️ 下载历史对局归档 ZIP"
+            for item in self.app.get("download_button")
+        ))
+        agreement = next(
+            item for item in self.app.checkbox
+            if item.label == "我了解这是一份包含私密信息的完整归档"
+        )
+        agreement.check().run()
+        self.assert_clean()
+        self.click("📦 生成历史对局归档 ZIP")
+
+        payload = self.app.session_state["prepared_archive_zip"]
+        self.assertEqual(payload["source"], str(archived))
+        with zipfile.ZipFile(io.BytesIO(payload["data"])) as package:
+            self.assertIn("20261029_zip_fixture/manifest.json", package.namelist())
+            self.assertIn("PRIVATE_ONLY", package.read(
+                "20261029_zip_fixture/final_state.json"
+            ).decode("utf-8"))
+        self.assertTrue(any(
+            item.label == "⬇️ 下载历史对局归档 ZIP"
+            for item in self.app.get("download_button")
+        ))
+
+        # An unfinished restricted human perspective may not access the full ZIP.
+        self.app.session_state["viewer_mode"] = "单一视角"
+        self.app.run()
+        self.assert_clean()
+        self.assertFalse(any(
+            item.label == "⬇️ 下载历史对局归档 ZIP"
+            for item in self.app.get("download_button")
+        ))
+
     def test_structured_archive_review_ui_uses_curated_public_events(self):
         archive = self.replays / "20261029_fixture"
         archive.mkdir()
