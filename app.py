@@ -15,6 +15,7 @@ from ui.ui_preview import preview_engine
 from service.view_projection import project_view, faction_counts, project_api_health
 from agent.model_protocol import ERROR_LABELS
 from storage.session_storage import storage_paths
+from storage.save_package import store_uploaded_save, MAX_SAVE_PACKAGE_BYTES
 from agent.ai_agent import AgentManager
 from storage.game_archive import game_statistics
 from engine.game_engine import GameEngine
@@ -582,6 +583,7 @@ with st.sidebar:
             if st.button("💾 保存当前进度", use_container_width=True, disabled=_busy):
                 try:
                     nm = ss.game_service.save(SAVE_DIR)
+                    ss.last_saved_filename = nm
                     st.success(f"已存档：{nm}")
                     st.toast(f"💾 已保存 {nm}")
                 except Exception as e:
@@ -590,8 +592,35 @@ with st.sidebar:
             st.caption("开始或读取游戏后可存档。")
 
         _saves = list_saves()
+        st.caption("进度存档可下载到本地，并在另一个浏览器会话中导入。存档包含真实身份、AI 私密记忆与局势信息，仅应作为私密备份保管；不包含 API Key。")
+        uploaded_save = st.file_uploader(
+            "导入私密进度存档（JSON）", type=["json"], key="portable_save_upload",
+            disabled=auto_running,
+            help="仅接受本应用 v6 进度存档；最大 16 MiB。导入后仍需填写自己的 API Key 才能继续。",
+        )
+        if st.button("📥 导入存档到本会话", use_container_width=True,
+                     disabled=auto_running or uploaded_save is None):
+            try:
+                imported_name = store_uploaded_save(uploaded_save.getvalue(), SAVE_DIR)
+                st.success(f"已安全导入：{imported_name}。选择该存档后点击“读取存档”即可恢复。")
+                st.rerun()
+            except (ValueError, OSError) as _import_error:
+                st.error(f"导入失败：{_import_error}")
         if _saves:
             pick = st.selectbox("选择存档读取", _saves, key="load_pick")
+            try:
+                with open(os.path.join(SAVE_DIR, pick), "rb") as _save_file:
+                    _save_bytes = _save_file.read(MAX_SAVE_PACKAGE_BYTES + 1)
+                if len(_save_bytes) <= MAX_SAVE_PACKAGE_BYTES:
+                    st.download_button(
+                        "📤 下载所选私密进度存档", data=_save_bytes, file_name=pick,
+                        mime="application/json", use_container_width=True,
+                        key=f"download_save_{pick}",
+                    )
+                else:
+                    st.error("该存档超过可导出大小上限，未提供下载。")
+            except OSError as _save_error:
+                st.error(f"读取存档失败：{type(_save_error).__name__}")
             st.caption("⚠️ 读档会销毁当前对局，并从存档当天的【下一夜】继续推演"
                        "（生成器无法原位恢复）；建议在白天阶段存档以减少跳过。")
             if st.button("📂 读取存档", use_container_width=True, disabled=auto_running):
