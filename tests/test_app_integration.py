@@ -57,6 +57,8 @@ class AppIntegrationTests(unittest.TestCase):
 
     def install_pending_human_action(self, human_seat=1, wolf_talk=None):
         manager = MemoryOnlyManager()
+        manager.has_pending = lambda: False
+        manager.get_usage_snapshot = lambda: {}
         engine = GameEngine(manager)
         engine.setup(config.GAME_BOARDS[config.DEFAULT_BOARD])
         if human_seat == "wolf":
