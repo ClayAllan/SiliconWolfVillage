@@ -26,6 +26,10 @@ def write_archive(root, name="game-1"):
                     "label": "好人投狼比例", "value": 0.75, "numerator": 3,
                     "denominator": 4, "definition": "按有效投票计数",
                 },
+                "malformed_metric": {
+                    "label": "异常指标", "value": float("nan"), "numerator": -1,
+                    "denominator": -2, "definition": "应被忽略的无效值",
+                },
             },
             "prompt_tuning_flags": ["检查格式稳定性"],
         },
@@ -61,6 +65,9 @@ class ArchiveReviewTests(unittest.TestCase):
             self.assertEqual(result["metadata"]["day"], 4)
             self.assertEqual(result["api_quality"]["total_tokens"], 1500)
             self.assertEqual(result["observed_metrics"]["good_vote_accuracy"]["numerator"], 3)
+            self.assertIsNone(result["observed_metrics"]["malformed_metric"]["value"])
+            self.assertIsNone(result["observed_metrics"]["malformed_metric"]["numerator"])
+            self.assertIsNone(result["observed_metrics"]["malformed_metric"]["denominator"])
             self.assertEqual(len(result["events"]), 2)
             self.assertEqual(result["events"][0]["text"], "我认为3号可疑")
             self.assertEqual(result["events"][1]["votes"], {"1": 3, "2": 0})
