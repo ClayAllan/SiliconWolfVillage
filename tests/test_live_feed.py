@@ -3,7 +3,7 @@ import unittest
 from engine import config
 from engine.game_engine import GameEngine
 from service.live_feed import (feed_identity, project_events, prepare_feed_state,
-                       request_scroll, unread_events, schedule_page_refresh)
+                       request_scroll, unread_events, select_feed_window, schedule_page_refresh)
 from test_runtime_regressions import MemoryOnlyManager
 
 
@@ -83,6 +83,46 @@ class LiveFeedTests(unittest.TestCase):
         ui.tick()
         self.assertEqual(ui.requested, "app")
         self.assertEqual(ui.interval, 1.5)
+
+    def test_bounded_feed_window_matches_channel_and_counts_unread_without_full_projection(self):
+        rows = [
+            {"event_seq": i, "kind": "player" if i % 3 == 0 else "judge", "text": str(i)}
+            for i in range(1, 301)
+        ]
+        state = {"feed_follow_latest": True}
+        visible, unseen, truncated, tail = select_feed_window(
+            state, rows, show_god=True, channel="玩家发言", full_history=False, limit=5,
+        )
+        self.assertEqual([row["event_seq"] for row in visible], [288, 291, 294, 297, 300])
+        self.assertEqual(unseen, 0)
+        self.assertTrue(truncated)
+        self.assertEqual(tail, 300)
+        self.assertEqual(state["_feed_seen_seq"], 300)
+
+        state["feed_follow_latest"] = False
+        rows.extend([
+            {"event_seq": 301, "kind": "judge", "text": "not player"},
+            {"event_seq": 302, "kind": "player", "text": "new player"},
+            {"event_seq": 303, "kind": "player", "text": "new player"},
+        ])
+        visible, unseen, truncated, tail = select_feed_window(
+            state, rows, show_god=True, channel="玩家发言", full_history=False, limit=5,
+        )
+        self.assertEqual(unseen, 2)
+        self.assertEqual([row["event_seq"] for row in visible], [294, 297, 300, 302, 303])
+        self.assertEqual(tail, 303)
+        self.assertTrue(truncated)
+
+    def test_full_history_feed_window_preserves_all_filtered_events(self):
+        rows = [{"event_seq": i, "kind": "god" if i % 2 else "player"} for i in range(1, 8)]
+        state = {"feed_follow_latest": False, "_feed_seen_seq": 2}
+        visible, unseen, truncated, tail = select_feed_window(
+            state, rows, show_god=False, channel="全部动态", full_history=True, limit=2,
+        )
+        self.assertEqual([row["event_seq"] for row in visible], [2, 4, 6])
+        self.assertEqual(unseen, 2)
+        self.assertFalse(truncated)
+        self.assertEqual(tail, 6)
 
     def test_each_public_event_gets_own_game_id_and_monotonic_sequence_after_load(self):
         engine = GameEngine(MemoryOnlyManager())
