@@ -691,6 +691,44 @@ class AgentManager:
         with self._transport_lock:
             return pending or bool(self._transport_calls)
 
+    def get_runtime_snapshot(self) -> dict:
+        """Return safe in-flight request metadata without prompts, responses, or credentials."""
+        now = time.monotonic()
+        with self._pending_lock:
+            pending_requests = []
+            for request_id, item in self._pending.items():
+                future = item.get("future")
+                started = float(item.get("started", now))
+                pending_requests.append({
+                    "request_id": str(request_id)[:8],
+                    "seat": item.get("seat"),
+                    "kind": item.get("kind", "unknown"),
+                    "age_seconds": round(max(0.0, now - started), 1),
+                    "future_done": bool(future and future.done()),
+                })
+            compression_pending_count = len(self._compression_pending)
+            request_guard_count = len(self._request_guards)
+        with self._transport_lock:
+            transport_call_count = len(self._transport_calls)
+
+        pending_requests.sort(key=lambda item: item["age_seconds"], reverse=True)
+        ages = [item["age_seconds"] for item in pending_requests]
+        pending_count = len(pending_requests)
+        in_flight_count = sum(not item["future_done"] for item in pending_requests)
+        has_pending = bool(
+            pending_count or compression_pending_count or request_guard_count or transport_call_count
+        )
+        return {
+            "has_pending": has_pending,
+            "pending_count": pending_count,
+            "in_flight_count": in_flight_count,
+            "pending_requests": pending_requests,
+            "oldest_pending_seconds": max(ages) if ages else None,
+            "compression_pending_count": compression_pending_count,
+            "request_guard_count": request_guard_count,
+            "transport_call_count": transport_call_count,
+        }
+
     def shutdown(self):
         """关闭已退出对局的任务池；运行中的网络调用按原超时结束。"""
         self.cancel_all_pending("对局服务关闭")
