@@ -41,17 +41,17 @@ def recent_archive_directories(replay_root, limit=MAX_ARCHIVE_CHOICES) -> list[P
     """List only recent finalized archives within this browser's isolated root."""
     root = Path(replay_root)
     try:
-        recent = nlargest(
+        return nlargest(
             max(1, min(int(limit), MAX_ARCHIVE_CHOICES)),
-            (path for path in root.iterdir() if path.is_dir() and not path.is_symlink()),
+            (
+                path for path in root.iterdir()
+                if path.is_dir() and not path.is_symlink()
+                and _ARCHIVE_NAME.fullmatch(path.name)
+                and (path / "manifest.json").is_file()
+                and not (path / "manifest.json").is_symlink()
+            ),
             key=lambda path: path.name,
         )
-        return [
-            path for path in recent
-            if _ARCHIVE_NAME.fullmatch(path.name)
-            and (path / "manifest.json").is_file()
-            and not (path / "manifest.json").is_symlink()
-        ]
     except (OSError, ValueError, TypeError):
         return []
 
