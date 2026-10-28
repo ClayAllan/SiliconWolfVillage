@@ -10,7 +10,10 @@ from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 
 from agent.ai_agent import AgentManager
+from engine import config
 from engine.game_engine import GameEngine
+from service.game_service import GameService
+from test_runtime_regressions import MemoryOnlyManager
 
 
 APP = Path(__file__).resolve().parents[1] / "app.py"
@@ -52,6 +55,34 @@ class AppIntegrationTests(unittest.TestCase):
         self.app.text_input[0].set_value("test-key-never-sent").run()
         self.click("🎬 开始新游戏")
 
+    def install_pending_human_action(self, human_seat=1, wolf_talk=None):
+        manager = MemoryOnlyManager()
+        engine = GameEngine(manager)
+        engine.setup(config.GAME_BOARDS[config.DEFAULT_BOARD])
+        if human_seat == "wolf":
+            human_seat = engine.wolves[0]
+        elif human_seat == "good":
+            human_seat = next(
+                seat for seat, role in engine.roles.items() if role.camp != "狼人"
+            )
+        engine.human_seat = human_seat
+        if wolf_talk is not None:
+            engine.current_wolf_talk = wolf_talk
+        is_wolf = engine.roles[human_seat].camp == "狼人"
+        generator = engine._ask(
+            human_seat,
+            "测试用内部提示；不应替代真人输入。",
+            "D1 狼人讨论" if is_wolf else "D1 发言",
+            public=not is_wolf,
+        )
+        service = GameService(
+            engine, str(self.replays), automatic=False, generator=generator
+        )
+        self.assertTrue(service.step())
+        self.assertEqual(service.snapshot().last_event_type, "human_input_required")
+        self.app.session_state["game_service"] = service
+        return engine, service, human_seat
+
     def test_manual_save_load_resume_and_reset(self):
         self.start_manual()
         self.click("⏭️ 单步")
@@ -71,6 +102,41 @@ class AppIntegrationTests(unittest.TestCase):
         self.click("🔄 重置")
         self.assertIsNone(self.app.session_state["engine"])
         self.assertIsNone(self.app.session_state["game_service"])
+
+
+    def test_pending_human_turn_renders_and_submits_the_real_action_form(self):
+        engine, service, human_seat = self.install_pending_human_action(1)
+        self.app.run()
+        self.assert_clean()
+        self.assertTrue(any("轮到你行动" in item.value for item in self.app.subheader))
+        speech = next(item for item in self.app.text_area if item.label == "你的发言")
+        speech.set_value("这是由真人表单提交的发言。")
+        submit = next(item for item in self.app.button if item.label == "提交行动")
+        submit.click().run()
+        self.assert_clean()
+        self.assertEqual(engine.reasoning_log[human_seat][-1]["speech"], "这是由真人表单提交的发言。")
+        self.assertEqual(engine.reasoning_log[human_seat][-1]["actor_source"], "human")
+        self.assertIsNone(engine.pending_human_action)
+
+    def test_living_human_wolf_sees_teammate_discussion_in_ui(self):
+        engine, service, human_seat = self.install_pending_human_action("wolf")
+        teammate = next(seat for seat in engine.wolves if seat != human_seat)
+        engine.current_wolf_talk = [(teammate, "队友的私密讨论内容")]
+        self.app.run()
+        self.assert_clean()
+        self.assertTrue(any("狼队私密频道" in item.value for item in self.app.subheader))
+        rendered = "\n".join(item.value for item in self.app.markdown)
+        self.assertIn("队友的私密讨论内容", rendered)
+
+    def test_good_human_never_sees_wolf_private_discussion_in_ui(self):
+        engine, service, human_seat = self.install_pending_human_action("good")
+        teammate = engine.wolves[0]
+        engine.current_wolf_talk = [(teammate, "不得向好人泄露的狼队私密内容")]
+        self.app.run()
+        self.assert_clean()
+        rendered = "\n".join(item.value for item in self.app.markdown)
+        self.assertNotIn("不得向好人泄露的狼队私密内容", rendered)
+        self.assertFalse(any("狼队私密频道" in item.value for item in self.app.subheader))
 
     def test_automatic_completion_renders_terminal_archive_and_metrics(self):
         def short_game(engine):
