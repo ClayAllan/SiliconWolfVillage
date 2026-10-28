@@ -191,6 +191,7 @@ def sync_game_state():
                       "last_archive", "archive_error"):
             ss[field] = getattr(snapshot, field)
         ss.advancing_since = snapshot.waiting_since
+        ss.runtime_diagnostics = getattr(snapshot, "runtime_diagnostics", {})
         integrity_error = _human_action_integrity_error(ss.engine)
         if integrity_error:
             # 即使后台服务来自热更新前的旧代码，也在页面层立即暂停并报告真人席位被代打。
@@ -807,7 +808,7 @@ with st.container(key="playback"):
     if reset_col.button("🔄 重置", use_container_width=True, disabled=auto_running):
         if ss.game_service is not None:
             ss.game_service.close("manual_reset")
-        for key in ("game_service","engine","running","done","status","error","advancing_since","last_event_type"):
+        for key in ("game_service","engine","running","done","status","error","advancing_since","last_event_type","runtime_diagnostics"):
             ss.pop(key, None)
         ss.preview_mode = False
         st.rerun()
@@ -858,6 +859,77 @@ elif lines:
     status_slot.caption("\n\n".join(lines))
 else:
     status_slot.empty()
+
+if live_engine and ss.game_service is not None:
+    runtime_diag = ss.get("runtime_diagnostics") or {}
+    wait_labels = {
+        "closed": "服务已关闭",
+        "finished": "对局已结束",
+        "error_paused": "异常后已暂停",
+        "human_input": "等待真人行动",
+        "model_request": "等待模型请求",
+        "automatic_progress": "自动推进中",
+        "manual_progress": "手动推进模式",
+        "paused_with_pending_request": "已暂停，但仍有待处理请求",
+        "paused": "已暂停",
+    }
+    with st.expander(
+        "🩺 对局运行诊断",
+        expanded=bool(ss.error or (
+            runtime_diag.get("worker_expected") and not runtime_diag.get("worker_alive")
+        )),
+    ):
+        st.caption(
+            f"运行状态：{wait_labels.get(runtime_diag.get('wait_kind'), '状态待确认')} · "
+            f"最近事件：{runtime_diag.get('last_event_type') or '暂无'} · "
+            f"状态修订号：{runtime_diag.get('revision', 0)}"
+        )
+        diag_cols = st.columns(4)
+        worker_expected = bool(runtime_diag.get("worker_expected"))
+        worker_alive = bool(runtime_diag.get("worker_alive"))
+        worker_label = "存活" if worker_alive else "未存活" if worker_expected else "当前不需要"
+        diag_cols[0].metric("后台线程", worker_label)
+        progress_age = runtime_diag.get("last_progress_age_seconds")
+        diag_cols[1].metric(
+            "最近推进",
+            "暂无" if progress_age is None else f"{progress_age:.1f} 秒前",
+        )
+        heartbeat_age = runtime_diag.get("worker_heartbeat_age_seconds")
+        diag_cols[2].metric(
+            "最近心跳",
+            "暂无" if heartbeat_age is None else f"{heartbeat_age:.1f} 秒前",
+        )
+        pending = runtime_diag.get("pending") or {}
+        diag_cols[3].metric("待处理请求", int(pending.get("pending_count", 0)))
+        waiting_age = runtime_diag.get("waiting_age_seconds")
+        if waiting_age is not None:
+            st.caption(f"当前等待已持续 {waiting_age:.1f} 秒；等待时间本身不等于故障。")
+        if worker_expected and not worker_alive:
+            st.error("运行状态要求后台线程推进，但线程当前未存活。请下载诊断并检查最近错误；系统不会自动重启不确定状态的生成器。")
+        elif runtime_diag.get("wait_kind") == "model_request":
+            oldest = pending.get("oldest_pending_seconds")
+            if oldest is not None:
+                st.info(f"仍有模型请求或待收集结果，最早一项已持续 {oldest:.1f} 秒。请结合 API 诊断判断是正常等待还是请求超时。")
+        elif runtime_diag.get("wait_kind") == "paused_with_pending_request":
+            st.warning("对局已暂停，但后台仍有请求或待收集结果。不要直接重置；先查看请求状态并使用单步收集或跳过当前行动。")
+
+        pending_requests = pending.get("pending_requests") or []
+        if pending_requests and not single_view:
+            st.caption("请求明细仅在非受限视角显示；不包含提示词或模型响应。")
+            st.json(pending_requests)
+
+        export_diag = dict(runtime_diag)
+        export_pending = dict(pending)
+        if single_view:
+            export_pending.pop("pending_requests", None)
+        export_diag["pending"] = export_pending
+        st.download_button(
+            "下载运行诊断（不含提示词与凭证）",
+            data=json.dumps(export_diag, ensure_ascii=False, indent=2),
+            file_name=f"runtime-diagnostic-{getattr(live_engine, 'game_id', 'game')}.json",
+            mime="application/json",
+            key=f"runtime-diagnostic-{getattr(live_engine, 'game_id', 'game')}",
+        )
 
 with st.container(key="workspace"):
     arena_col, feed_col = st.columns([1.45, 1], gap="large")

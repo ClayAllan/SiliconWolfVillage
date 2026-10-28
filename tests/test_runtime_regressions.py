@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import sys
 import threading
+from concurrent.futures import Future
 import time
 import unittest
 from pathlib import Path
@@ -92,6 +93,33 @@ class AsyncAgentTests(unittest.TestCase):
         serialized = str(manager.agent_memory[1]["recent"])
         self.assertIn("测试跳过", serialized)
         self.assertNotIn("迟到结果", serialized)
+        manager._request_pool.shutdown(wait=True, cancel_futures=True)
+
+    def test_runtime_snapshot_reports_safe_pending_request_metadata(self):
+        manager = self.make_manager()
+        request_id = "private-prompt-request-123"
+        future = Future()
+        with manager._pending_lock:
+            manager._pending[request_id] = {
+                "future": future,
+                "seat": 4,
+                "kind": "speech",
+                "started": time.monotonic() - 2.0,
+                "prompt_text": "must never appear in diagnostics",
+            }
+
+        snapshot = manager.get_runtime_snapshot()
+        self.assertTrue(snapshot["has_pending"])
+        self.assertEqual(snapshot["pending_count"], 1)
+        self.assertEqual(snapshot["in_flight_count"], 1)
+        self.assertEqual(snapshot["pending_requests"][0]["request_id"], request_id[:8])
+        self.assertEqual(snapshot["pending_requests"][0]["seat"], 4)
+        self.assertGreaterEqual(snapshot["oldest_pending_seconds"], 1.5)
+        self.assertNotIn("must never appear", str(snapshot))
+        self.assertNotIn("prompt_text", str(snapshot))
+
+        with manager._pending_lock:
+            manager._pending.pop(request_id, None)
         manager._request_pool.shutdown(wait=True, cancel_futures=True)
 
     def test_memory_compression_submission_is_nonblocking(self):

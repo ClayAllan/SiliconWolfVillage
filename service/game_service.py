@@ -9,7 +9,7 @@ import json
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from engine import config
@@ -44,6 +44,7 @@ class GameSnapshot:
     waiting_since: float
     last_archive: dict | None
     archive_error: str
+    runtime_diagnostics: dict = field(default_factory=dict)
 
 
 class GameService:
@@ -69,6 +70,9 @@ class GameService:
         self._error = ""
         self._last_event_type = ""
         self._waiting_since = 0.0
+        self._last_progress_at = time.time()
+        self._last_worker_heartbeat_at = 0.0
+        self._worker_started_at = 0.0
         self._last_archive = None
         self._archive_error = ""
         self.revision = 0
@@ -206,11 +210,86 @@ class GameService:
                     setattr(view, key, copy.deepcopy(value))
             view.manager = _UsageSnapshot(self._engine.manager)
             view.recorder = None
+
+            manager = self._engine.manager
+            if hasattr(manager, "get_runtime_snapshot"):
+                pending = manager.get_runtime_snapshot()
+            else:
+                has_pending = bool(manager.has_pending()) if hasattr(manager, "has_pending") else False
+                pending = {
+                    "has_pending": has_pending,
+                    "pending_count": int(has_pending),
+                    "in_flight_count": int(has_pending),
+                    "pending_requests": [],
+                    "compression_pending_count": 0,
+                    "request_guard_count": 0,
+                    "transport_call_count": 0,
+                    "oldest_pending_seconds": None,
+                }
+
+            now = time.time()
+            human_waiting = bool(getattr(self._engine, "pending_human_action", None))
+            if self._closed:
+                wait_kind = "closed"
+            elif self._done:
+                wait_kind = "finished"
+            elif self._error:
+                wait_kind = "error_paused"
+            elif human_waiting:
+                wait_kind = "human_input"
+            elif self._running and pending.get("has_pending"):
+                wait_kind = "model_request"
+            elif self._running and self._automatic:
+                wait_kind = "automatic_progress"
+            elif self._running:
+                wait_kind = "manual_progress"
+            elif pending.get("has_pending"):
+                wait_kind = "paused_with_pending_request"
+            else:
+                wait_kind = "paused"
+
+            worker = self._worker
+            worker_alive = bool(worker and worker.is_alive())
+            worker_expected = bool(
+                self._running and self._automatic and not self._done and not self._closed
+            )
+            last_progress_at = getattr(self, "_last_progress_at", 0.0)
+            last_heartbeat_at = getattr(self, "_last_worker_heartbeat_at", 0.0)
+            runtime_diagnostics = {
+                "game_id": str(getattr(self._engine, "game_id", "")),
+                "wait_kind": wait_kind,
+                "running": self._running,
+                "automatic": self._automatic,
+                "done": self._done,
+                "closed": self._closed,
+                "worker_expected": worker_expected,
+                "worker_alive": worker_alive,
+                "worker_name": getattr(worker, "name", None),
+                "worker_started_at": getattr(self, "_worker_started_at", 0.0) or None,
+                "worker_heartbeat_at": last_heartbeat_at or None,
+                "worker_heartbeat_age_seconds": (
+                    round(max(0.0, now - last_heartbeat_at), 1) if last_heartbeat_at else None
+                ),
+                "last_progress_at": last_progress_at or None,
+                "last_progress_age_seconds": (
+                    round(max(0.0, now - last_progress_at), 1) if last_progress_at else None
+                ),
+                "waiting_since": self._waiting_since or None,
+                "waiting_age_seconds": (
+                    round(max(0.0, now - self._waiting_since), 1) if self._waiting_since else None
+                ),
+                "last_event_type": self._last_event_type,
+                "revision": self.revision,
+                "pending": copy.deepcopy(pending),
+                "error": self._error,
+                "archive_error": self._archive_error,
+            }
             return GameSnapshot(
                 engine=view, running=self._running, done=self._done, status=self._status,
                 error=self._error, last_event_type=self._last_event_type,
                 waiting_since=self._waiting_since,
                 last_archive=copy.deepcopy(self._last_archive), archive_error=self._archive_error,
+                runtime_diagnostics=runtime_diagnostics,
             )
 
     def save(self, directory):
@@ -261,6 +340,8 @@ class GameService:
     def _ensure_worker_locked(self):
         if (not self._closed and not self._done and self._running and self._automatic
                 and self._worker is None):
+            self._worker_started_at = time.time()
+            self._last_worker_heartbeat_at = self._worker_started_at
             self._worker = threading.Thread(
                 target=self._run, name=f"wolf-game-{self._engine.game_id}", daemon=True,
             )
@@ -271,6 +352,7 @@ class GameService:
         try:
             while True:
                 with self._condition:
+                    self._last_worker_heartbeat_at = time.time()
                     if self._closed or self._done or not self._running or not self._automatic:
                         self._worker = None
                         self._condition.notify_all()
@@ -351,6 +433,8 @@ class GameService:
             self.revision += 1
             self._last_event_type = event.get("type", "")
             self._status = event.get("status", "")
+            if self._last_event_type not in {"waiting", "compress_waiting"}:
+                self._last_progress_at = time.time()
             if self._last_event_type == "human_input_required":
                 # 不能持锁等待浏览器输入；暂停自动推进，提交行动后再唤醒。
                 self._running = False
