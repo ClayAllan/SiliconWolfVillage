@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import os
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 METRIC_KEYS = (
@@ -23,7 +25,8 @@ QUALITY_VALUES = {"valid", "degraded", "invalid", "unknown"}
 STATUS_VALUES = {"completed", "interrupted", "unknown"}
 
 CSV_FIELDS = [
-    "board_name", "good_model", "wolf_model", "archive_count",
+    "board_name", "base_url", "good_model", "wolf_model", "temperature",
+    "agent_timeout", "react_budget", "source_fingerprint", "archive_count",
     "completed_archives", "interrupted_archives", "eligible_games", "excluded_archives",
     "valid_archives", "degraded_archives", "invalid_archives", "unknown_quality_archives",
     "good_wins", "wolf_wins", "other_wins", "good_win_rate", "wolf_win_rate", "other_win_rate",
@@ -43,6 +46,46 @@ def _nonnegative_int(value):
     return value if type(value) is int and value >= 0 else None
 
 
+def _safe_base_url(value):
+    """Keep endpoint identity but discard userinfo, query and fragment."""
+    try:
+        parsed = urlsplit(_safe_text(value, 1000))
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname
+        if scheme not in {"http", "https"} or not hostname:
+            return "unknown"
+        host = hostname.lower()
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        port = parsed.port
+        if port is not None:
+            host = f"{host}:{port}"
+        return urlunsplit((scheme, host, parsed.path.rstrip("/"), "", ""))
+    except (TypeError, ValueError):
+        return "unknown"
+
+
+def _source_fingerprint(source_snapshot):
+    if not isinstance(source_snapshot, dict):
+        return "unknown"
+    runtime = source_snapshot.get("runtime") if isinstance(source_snapshot.get("runtime"), dict) else {}
+    files = source_snapshot.get("files") if isinstance(source_snapshot.get("files"), dict) else {}
+    prompts = source_snapshot.get("prompts") if isinstance(source_snapshot.get("prompts"), dict) else {}
+    selected = {
+        "runtime_version_id": _safe_text(runtime.get("version_id"), 128),
+        "config.py": _safe_text(files.get("config.py"), 128),
+        "game_engine.py": _safe_text(files.get("game_engine.py"), 128),
+        "ai_agent.py": _safe_text(files.get("ai_agent.py"), 128),
+        "roles.py": _safe_text(files.get("roles.py"), 128),
+        "system_template_sha256": _safe_text(prompts.get("system_template_sha256"), 128),
+        "summary_template_sha256": _safe_text(prompts.get("summary_template_sha256"), 128),
+    }
+    if not any(selected.values()):
+        return "unknown"
+    encoded = json.dumps(selected, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+
+
 def _read_record(manifest_path: Path):
     try:
         if manifest_path.stat().st_size > MAX_MANIFEST_BYTES:
@@ -55,6 +98,8 @@ def _read_record(manifest_path: Path):
     metadata = manifest.get("metadata")
     api = manifest.get("api_quality")
     analysis = manifest.get("analysis")
+    config = manifest.get("config") if isinstance(manifest.get("config"), dict) else {}
+    source_snapshot = manifest.get("source_snapshot")
     if not isinstance(metadata, dict) or not isinstance(api, dict) or not isinstance(analysis, dict):
         return None, "manifest 缺少 metadata、api_quality 或 analysis"
 
@@ -65,6 +110,18 @@ def _read_record(manifest_path: Path):
     if status not in STATUS_VALUES:
         status = "unknown"
     winner = _safe_text(metadata.get("winner"), 80)
+    temperature = config.get("temperature")
+    if type(temperature) not in (int, float) or not math.isfinite(temperature) or not 0 <= temperature <= 2:
+        temperature = None
+    else:
+        temperature = round(float(temperature), 3)
+    timeout = config.get("agent_timeout")
+    if type(timeout) is not int or not 1 <= timeout <= 3600:
+        timeout = None
+    react_budget = config.get("react_budget")
+    if type(react_budget) is not int or not 0 <= react_budget <= 100:
+        react_budget = None
+    source_fingerprint = _source_fingerprint(source_snapshot)
     metrics = {}
     observed = analysis.get("observed_metrics")
     if isinstance(observed, dict):
@@ -89,17 +146,27 @@ def _read_record(manifest_path: Path):
         "quality": quality,
         "winner": winner,
         "board_name": _safe_text(metadata.get("board_name"), 120) or "unknown",
+        "base_url": _safe_base_url(config.get("base_url")),
         "good_model": _safe_text(metadata.get("good_model"), 120) or "unknown",
         "wolf_model": _safe_text(metadata.get("wolf_model"), 120) or "unknown",
+        "temperature": temperature,
+        "agent_timeout": timeout,
+        "react_budget": react_budget,
+        "source_fingerprint": source_fingerprint,
         "metrics": metrics,
     }, None
 
 
-def _new_cohort(board, good_model, wolf_model):
+def _new_cohort(board, base_url, good_model, wolf_model, temperature, agent_timeout, react_budget, source_fingerprint):
     return {
         "board_name": board,
+        "base_url": base_url,
         "good_model": good_model,
         "wolf_model": wolf_model,
+        "temperature": temperature,
+        "agent_timeout": agent_timeout,
+        "react_budget": react_budget,
+        "source_fingerprint": source_fingerprint,
         "archive_count": 0,
         "status_counts": Counter(),
         "quality_counts": Counter(),
@@ -148,7 +215,10 @@ def build_arena_report(archive_root) -> dict:
     quality_counts = Counter()
     status_counts = Counter()
     for record in records:
-        key = (record["board_name"], record["good_model"], record["wolf_model"])
+        key = (
+            record["board_name"], record["base_url"], record["good_model"], record["wolf_model"],
+            record["temperature"], record["agent_timeout"], record["react_budget"], record["source_fingerprint"],
+        )
         cohort = cohorts.setdefault(key, _new_cohort(*key))
         cohort["archive_count"] += 1
         cohort["status_counts"][record["status"]] += 1
@@ -164,8 +234,13 @@ def build_arena_report(archive_root) -> dict:
             and bool(record["winner"])
             and record["quality"] == "valid"
             and record["board_name"] != "unknown"
+            and record["base_url"] != "unknown"
             and record["good_model"] != "unknown"
             and record["wolf_model"] != "unknown"
+            and record["temperature"] is not None
+            and record["agent_timeout"] is not None
+            and record["react_budget"] is not None
+            and record["source_fingerprint"] != "unknown"
         )
         if not eligible:
             continue
@@ -190,8 +265,13 @@ def build_arena_report(archive_root) -> dict:
         wins = cohort["wins"]
         row = {
             "board_name": cohort["board_name"],
+            "base_url": cohort["base_url"],
             "good_model": cohort["good_model"],
             "wolf_model": cohort["wolf_model"],
+            "temperature": cohort["temperature"],
+            "agent_timeout": cohort["agent_timeout"],
+            "react_budget": cohort["react_budget"],
+            "source_fingerprint": cohort["source_fingerprint"],
             "archive_count": cohort["archive_count"],
             "completed_archives": cohort["status_counts"]["completed"],
             "interrupted_archives": cohort["status_counts"]["interrupted"],
