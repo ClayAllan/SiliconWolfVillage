@@ -101,6 +101,11 @@ class PrivateArchiveZipTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "总大小"):
                 build_private_archive_zip(self.root, self.archive)
 
+    def test_recent_archives_limit_counts_actual_archives_not_unfinished_directories(self):
+        for number in range(60):
+            (self.root / f"20261130_unfinished_{number:03d}").mkdir()
+        self.assertEqual(recent_archive_directories(self.root, limit=1), [self.archive])
+
     def test_recent_archives_only_show_finalized_directories(self):
         (self.root / "20261030_game2").mkdir()
         archived = recent_archive_directories(self.root)
