@@ -8,6 +8,7 @@ import uuid
 from service.room_registry import get_registry
 from storage.replay_frames import DisplayReplay
 from storage.replay_reader import legacy_public_rows, MAX_LEGACY_ARCHIVE_BYTES
+from storage.archive_review import load_archive_review
 from service.live_feed import schedule_page_refresh
 from ui.feed_ui import scroll_script
 from ui import ui_design as design
@@ -295,7 +296,89 @@ def owner_panel(st, replay_root):
                     if data["rows"]:
                         pos = st.slider("旧档事件位置", 1, len(data["rows"]), 1) if len(data["rows"]) > 1 else 1
                         for row in data["rows"][max(0, pos - 90):pos]:
-                            st.text(f"${row['phase']} · ${row['seat'] or '法官'}：${row['text']}")
+                            st.text(f"{row['phase']} · {row['seat'] or '法官'}：{row['text']}")
                 except (ValueError, UnicodeError):
                     st.error("文件不是可读取的旧归档。")
+ 
+    with st.expander("📚 历史对局结构化复盘"):
+        archive_dirs = sorted(
+            (p for p in Path(replay_root).glob("*/manifest.json") if p.is_file()),
+            key=lambda p: p.parent.name,
+            reverse=True,
+        )
+        archive_dirs = [p.parent for p in archive_dirs[:100]]
+        if not archive_dirs:
+            st.caption("本会话还没有可读取的结构化档案。")
+        else:
+            selected_archive = st.selectbox(
+                "选择历史对局", archive_dirs,
+                format_func=lambda p: p.name,
+                key="structured_review_archive",
+            )
+            if st.button("读取结构化复盘", key="load_structured_review"):
+                try:
+                    ss["structured_review_path"] = str(selected_archive)
+                    ss["structured_review_data"] = load_archive_review(replay_root, selected_archive)
+                    st.success("已读取只读复盘；未发起模型请求，也未修改档案。")
+                except (OSError, ValueError, UnicodeError) as error:
+                    ss.pop("structured_review_path", None)
+                    ss.pop("structured_review_data", None)
+                    st.error(f"无法读取档案：{error}")
+            review = ss.get("structured_review_data")
+            if review and ss.get("structured_review_path") == str(selected_archive):
+                meta = review["metadata"]
+                st.subheader(f"{meta.get('board_name') or '未知板子'} · {meta.get('winner') or '未决胜负'}")
+                st.caption(
+                    f"对局 {meta.get('game_id') or '未知'} · {meta.get('status') or '未知状态'} · "
+                    f"第 {meta.get('day') if meta.get('day') is not None else '未知'} 天 · "
+                    f"开始 {meta.get('started_at') or '未知时间'}"
+                )
+                metric_cols = st.columns(4)
+                metric_cols[0].metric("模型请求", review["api_quality"]["requests"])
+                metric_cols[1].metric("兜底请求", review["api_quality"]["fallback"])
+                metric_cols[2].metric("总 Token", f"{review['api_quality']['total_tokens']:,}")
+                rate = review["api_quality"]["fallback_rate"]
+                metric_cols[3].metric("兜底率", "N/A" if rate is None else f"{rate:.1%}")
+                if review["observed_metrics"]:
+                    st.markdown("**可核验统计**")
+                    for metric_key, metric in review["observed_metrics"].items():
+                        value = metric["value"]
+                        shown = "N/A" if value is None else f"{value:.1%}"
+                        denominator = metric["denominator"]
+                        count = (
+                            f"（{metric['numerator'] if metric['numerator'] is not None else '—'} / "
+                            f"{denominator if denominator is not None else '—'}）"
+                        )
+                        st.write(f"- **{metric['label']}：{shown}** {count}。{metric['definition']}")
+                if review["prompt_tuning_flags"]:
+                    with st.expander("复盘线索"):
+                        for flag in review["prompt_tuning_flags"]:
+                            st.write(f"- {flag}")
+                events = review["events"]
+                if review["issue"]:
+                    st.caption(review["issue"])
+                if events:
+                    st.markdown("**公开事件时间线**")
+                    st.caption(f"当前载入 {len(events)} 条公开事件；该视图不读取私密推理、隐藏状态或 API 原始响应。")
+                    event_pos = st.number_input(
+                        "定位到事件序号", min_value=1, max_value=len(events),
+                        value=len(events), step=1,
+                        key="structured_review_event_" + selected_archive.name,
+                    )
+                    with st.container(height=300):
+                        for row in events[max(0, int(event_pos) - 10):int(event_pos)]:
+                            prefix = f"#{row['seq']} " if row.get("seq") else ""
+                            phase = row.get("phase") or "阶段未记录"
+                            if row["kind"] == "votechart":
+                                st.markdown(f"**{prefix}{phase} · {row['title']}**")
+                                st.json({"票型": row["votes"], "票重合计": row["totals"],
+                                         "出局座位": row["winner"], "警长": row["sheriff"]})
+                            else:
+                                seat = f"{row['seat']} 号" if row.get("seat") else "法官"
+                                st.text(f"{prefix}{phase} · {seat}：{row['text']}")
+                else:
+                    st.caption("没有可展示的公开事件；可继续查看下方复盘摘要。")
+                with st.expander("完整复盘摘要", expanded=False):
+                    st.markdown(review["summary"])
+
     return playing
