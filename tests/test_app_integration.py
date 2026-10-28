@@ -94,6 +94,10 @@ class AppIntegrationTests(unittest.TestCase):
         saved = list(self.saves.glob("*.json"))
         self.assertEqual(len(saved), 1)
         self.assertNotIn("test-key-never-sent", saved[0].read_text(encoding="utf-8"))
+        self.assertTrue(any(
+            item.label == "📤 下载所选私密进度存档"
+            for item in self.app.get("download_button")
+        ))
         old_service = self.app.session_state["game_service"]
         self.click("📂 读取存档")
         self.assertFalse(old_service.step())
@@ -384,6 +388,76 @@ class AppIntegrationTests(unittest.TestCase):
         service.close()
         get_registry().release(room, owner)
 
+
+    def test_structured_archive_review_ui_uses_curated_public_events(self):
+        archive = self.replays / "20261029_fixture"
+        archive.mkdir()
+        manifest = {
+            "metadata": {
+                "game_id": "fixture-game", "started_at": "2026-10-29T01:00:00+08:00",
+                "archived_at": "2026-10-29T01:10:00+08:00", "status": "completed",
+                "winner": "好人", "board_name": "验收测试板", "good_model": "offline-good",
+                "wolf_model": "offline-wolf", "day": 2,
+            },
+            "api_quality": {
+                "requests": 4, "success": 3, "fallback": 1, "canceled": 0,
+                "prompt_tokens": 80, "completion_tokens": 43, "total_tokens": 123,
+                "fallback_rate": 0.25,
+            },
+            "analysis": {
+                "observed_metrics": {
+                    "good_vote_accuracy": {
+                        "label": "好人投狼比例", "value": 0.5, "numerator": 1,
+                        "denominator": 2, "definition": "离线验收样本",
+                    },
+                },
+                "prompt_tuning_flags": ["仅用于验收的提示"],
+            },
+        }
+        (archive / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+        )
+        (archive / "summary.md").write_text(
+            "# 私密复盘摘要\n仅供房主查看", encoding="utf-8"
+        )
+        events = [
+            {
+                "seq": 1, "timestamp": "t1", "event": "player_died",
+                "state": {"role": "狼人", "secret": "DO_NOT_RENDER"},
+                "role": "狼人", "seat": 3,
+            },
+            {
+                "seq": 2, "timestamp": "t2", "event": "public_log",
+                "state": {"role": "狼人", "secret": "DO_NOT_RENDER"},
+                "entry": {
+                    "kind": "player", "phase": "第1天", "seat": 4,
+                    "text": "公开发言样本", "nested_secret": "DO_NOT_RENDER",
+                },
+            },
+            {
+                "seq": 3, "timestamp": "t3", "event": "public_log",
+                "entry": {"kind": "god", "text": "DO_NOT_RENDER"},
+            },
+        ]
+        (archive / "events.jsonl").write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in events),
+            encoding="utf-8",
+        )
+
+        self.app.run()
+        self.assert_clean()
+        self.click("读取结构化复盘")
+
+        self.assertTrue(any("验收测试板 · 好人" in item.value for item in self.app.subheader))
+        self.assertTrue(any(item.label == "总 Token" and item.value == "123" for item in self.app.metric))
+        rendered = "\n".join(
+            [item.value for item in self.app.markdown]
+            + [item.value for item in self.app.text]
+        )
+        self.assertIn("公开发言样本", rendered)
+        self.assertIn("仅供房主查看", rendered)
+        self.assertNotIn("DO_NOT_RENDER", rendered)
+        self.assert_clean()
 
 if __name__ == "__main__":
     unittest.main()
