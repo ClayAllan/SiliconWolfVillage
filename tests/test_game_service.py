@@ -113,6 +113,23 @@ class GameServiceTests(unittest.TestCase):
         service.play()
         self.wait_until(lambda: service.snapshot().engine.day > paused_day)
 
+    def test_unexpected_scheduler_error_pauses_worker_and_allows_resume(self):
+        engine, service = self.make_service()
+        with patch("service.game_service.rerun_delay", side_effect=RuntimeError("scheduler fault")):
+            service.play()
+            self.wait_until(lambda: bool(service.snapshot().error))
+            failed = service.snapshot()
+            self.assertFalse(failed.running)
+            self.assertFalse(failed.done)
+            self.assertIn("scheduler fault", failed.error)
+            self.assertEqual(failed.last_event_type, "worker_error")
+            self.assertIsNone(service._worker)
+
+        paused_day = engine.day
+        service.play()
+        self.wait_until(lambda: engine.day > paused_day)
+        self.assertTrue(service.snapshot().running)
+
     def test_repeated_play_and_concurrent_manual_steps_are_serialized(self):
         engine, service = self.make_service(automatic=False)
         for _ in range(20):

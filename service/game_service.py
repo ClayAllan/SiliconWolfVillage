@@ -267,11 +267,13 @@ class GameService:
             self._worker.start()
 
     def _run(self):
+        current_thread = threading.current_thread()
         try:
             while True:
                 with self._condition:
                     if self._closed or self._done or not self._running or not self._automatic:
                         self._worker = None
+                        self._condition.notify_all()
                         return
                     remaining = self._next_due - time.monotonic()
                     if remaining > 0:
@@ -281,11 +283,27 @@ class GameService:
                     self._next_due = time.monotonic() + rerun_delay(
                         self._last_event_type, self._delay, self._turbo,
                     )
+        except Exception as error:
+            # A scheduler/condition failure is outside _advance_locked's engine-error guard.
+            # Fail closed instead of leaving running=True with no worker to make progress.
+            with self._condition:
+                if not self._closed and not self._done:
+                    self._running = False
+                    self._error = (
+                        f"后台推进线程异常，已暂停：{type(error).__name__}: {error}"
+                    )
+                    self._status = "后台推进异常，已暂停"
+                    self._last_event_type = "worker_error"
+                    self.revision += 1
+                if self._worker is current_thread:
+                    self._worker = None
+                self._condition.notify_all()
+            config.get_logger().exception("后台推进线程意外退出：%s", error)
         finally:
             with self._condition:
-                # 异常退出也释放线程占位；运行状态由推进错误分支处理。
-                if self._worker is threading.current_thread():
+                if self._worker is current_thread:
                     self._worker = None
+                    self._condition.notify_all()
 
     def _publish_display(self):
         if self.display_replay is None:

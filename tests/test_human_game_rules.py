@@ -31,6 +31,15 @@ class HumanGameRulesTests(unittest.TestCase):
         shot_line = next(line for line in self.engine.replay_logs
                          if f"猎人({hunter_seat}号)开枪带走" in line)
         self.assertNotIn(f"{target_seat}号({target_role})", shot_line)
+        viewer_seat = next(
+            seat for seat in self.engine.alive_seats()
+            if seat not in {hunter_seat, target_seat}
+            and self.engine.roles[seat].camp != "狼人"
+        )
+        self.engine.human_seat = viewer_seat
+        view = project_view(self.engine, viewer_seat=viewer_seat)
+        self.assertEqual(view.players[target_seat]["role"], "未知")
+        self.assertFalse(view.players[target_seat]["alive"])
 
     def test_day_prompt_teaches_guarded_wolf_kill_and_witch_poison_are_consistent(self):
         seat = next(s for s in self.engine.players if self.engine.roles[s].camp != "狼人")
@@ -42,6 +51,34 @@ class HumanGameRulesTests(unittest.TestCase):
         self.assertIn("女巫毒药可独立造成死亡", prompt)
         self.assertIn("完全自洽", prompt)
         self.assertIn("不得称为机械矛盾或平安夜", prompt)
+
+
+    def test_witch_poison_kills_even_when_wolf_kill_is_empty(self):
+        self.engine.day = 2
+        self.engine.phase = "第2夜"
+        self.engine.night.update({
+            "wolf_kill": None,
+            "guard_target": 4,
+            "witch_save": None,
+            "witch_poison": 3,
+            "dream_target": None,
+            "seer_check": None,
+            "magician_swap": None,
+        })
+
+        deaths = self.engine.settle_night()
+        self.assertEqual(deaths, {3: "poison"})
+        self.engine._mark_dead_batch(deaths.keys(), "夜间结算")
+        self.engine.phase = "第2天"
+        before = len(self.engine.public_log)
+        list(self.engine._announce_morning(deaths, peace_first=False))
+        public_text = "\n".join(
+            row.get("text", "") for row in self.engine.public_log[before:]
+        )
+
+        self.assertFalse(self.engine.players[3]["alive"])
+        self.assertIn("3号倒下", public_text)
+        self.assertNotIn("平安夜", public_text)
 
     def test_eliminated_human_can_see_all_roles_but_not_private_wolf_channels(self):
         viewer = next(s for s in self.engine.players if self.engine.roles[s].camp != "狼人")
