@@ -75,6 +75,7 @@ def _source_fingerprint(source_snapshot):
         "runtime_version_id": _safe_text(runtime.get("version_id"), 128),
         "config.py": _safe_text(files.get("config.py"), 128),
         "game_engine.py": _safe_text(files.get("game_engine.py"), 128),
+        "game_archive.py": _safe_text(files.get("game_archive.py"), 128),
         "ai_agent.py": _safe_text(files.get("ai_agent.py"), 128),
         "roles.py": _safe_text(files.get("roles.py"), 128),
         "system_template_sha256": _safe_text(prompts.get("system_template_sha256"), 128),
