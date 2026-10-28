@@ -9,7 +9,8 @@ from storage.arena_analysis import build_arena_report, write_arena_report
 
 def add_manifest(root, name, *, game_id, status="completed", quality="valid",
                  winner="好人", board="标准板", good_model="good-A", wolf_model="wolf-B",
-                 numerator=1, denominator=2, extra=None):
+                 base_url="https://api.example.com/v1", temperature=0.7, agent_timeout=60,
+                 react_budget=3, source_id="source-v1", numerator=1, denominator=2, extra=None):
     directory = Path(root) / name
     directory.mkdir()
     manifest = {
@@ -17,6 +18,17 @@ def add_manifest(root, name, *, game_id, status="completed", quality="valid",
             "game_id": game_id, "archived_at": f"2026-10-{len(name):02d}",
             "status": status, "winner": winner, "board_name": board,
             "good_model": good_model, "wolf_model": wolf_model,
+        },
+        "config": {
+            "base_url": base_url, "temperature": temperature,
+            "agent_timeout": agent_timeout, "react_budget": react_budget,
+        },
+        "source_snapshot": {
+            "runtime": {"version_id": source_id},
+            "files": {"config.py": "cfg-" + source_id, "game_engine.py": "engine-" + source_id,
+                      "ai_agent.py": "agent-" + source_id, "roles.py": "roles-" + source_id},
+            "prompts": {"system_template_sha256": "system-" + source_id,
+                        "summary_template_sha256": "summary-" + source_id},
         },
         "api_quality": {"quality": quality},
         "analysis": {
@@ -68,6 +80,22 @@ class ArenaAnalysisTests(unittest.TestCase):
             self.assertIsNone(cohort["metrics"]["good_vote_accuracy"]["value"])
             self.assertEqual(cohort["metrics"]["good_vote_accuracy"]["games"], 0)
             self.assertEqual(report["quality_counts"]["unknown"], 1)
+
+
+    def test_endpoint_settings_and_source_fingerprint_split_cohorts(self):
+        with tempfile.TemporaryDirectory() as root:
+            add_manifest(root, "g1", game_id="g1")
+            add_manifest(root, "g2", game_id="g2", temperature=0.9)
+            add_manifest(root, "g3", game_id="g3", source_id="source-v2")
+            add_manifest(root, "g4", game_id="g4",
+                         base_url="https://user:secret@api.example.com/v1?token=do-not-report")
+            report = build_arena_report(root)
+            self.assertEqual(len(report["cohorts"]), 3)
+            self.assertEqual(sum(row["eligible_games"] for row in report["cohorts"]), 4)
+            self.assertTrue(all(row["source_fingerprint"] != "unknown" for row in report["cohorts"]))
+            self.assertTrue(all(row["base_url"] == "https://api.example.com/v1" for row in report["cohorts"]))
+            self.assertNotIn("secret", json.dumps(report).lower())
+            self.assertNotIn("do-not-report", json.dumps(report))
 
     def test_malformed_and_oversized_manifests_are_reported_as_skipped(self):
         with tempfile.TemporaryDirectory() as root:
