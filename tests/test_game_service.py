@@ -102,6 +102,27 @@ class GameServiceTests(unittest.TestCase):
         self.assertTrue((archive / "final_state.json").exists())
         self.assertTrue((archive / "summary.md").exists())
 
+    def test_runtime_snapshot_reports_worker_and_progress_state(self):
+        _, service = self.make_service()
+        initial = service.snapshot().runtime_diagnostics
+        self.assertEqual(initial["wait_kind"], "paused")
+        self.assertFalse(initial["worker_expected"])
+        self.assertIsNotNone(initial["last_progress_at"])
+
+        service.play()
+        self.wait_until(lambda: service.snapshot().runtime_diagnostics["worker_alive"])
+        running = service.snapshot().runtime_diagnostics
+        self.assertTrue(running["worker_expected"])
+        self.assertTrue(running["worker_alive"])
+        self.assertGreaterEqual(running["revision"], 1)
+        self.assertIn("last_progress_age_seconds", running)
+
+        service.pause()
+        self.wait_until(lambda: not service.snapshot().runtime_diagnostics["worker_alive"])
+        paused = service.snapshot().runtime_diagnostics
+        self.assertFalse(paused["worker_expected"])
+        self.assertEqual(paused["wait_kind"], "paused")
+
     def test_pause_is_stable_and_resume_advances(self):
         engine, service = self.make_service()
         service.play()
@@ -124,6 +145,9 @@ class GameServiceTests(unittest.TestCase):
             self.assertIn("scheduler fault", failed.error)
             self.assertEqual(failed.last_event_type, "worker_error")
             self.assertIsNone(service._worker)
+            self.assertEqual(failed.runtime_diagnostics["wait_kind"], "error_paused")
+            self.assertFalse(failed.runtime_diagnostics["worker_expected"])
+            self.assertFalse(failed.runtime_diagnostics["worker_alive"])
 
         paused_day = engine.day
         service.play()
