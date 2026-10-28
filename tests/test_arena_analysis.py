@@ -64,7 +64,7 @@ class ArenaAnalysisTests(unittest.TestCase):
             add_manifest(root, "unknown-quality", game_id="unknown", quality="mystery", numerator=0, denominator=0)
             report = build_arena_report(root)
             cohort = report["cohorts"][0]
-            self.assertEqual(cohort["eligible_games"], 2)  # winner/quality valid, despite no metric denominator
+            self.assertEqual(cohort["eligible_games"], 1)  # unknown-quality sample is excluded
             self.assertIsNone(cohort["metrics"]["good_vote_accuracy"]["value"])
             self.assertEqual(cohort["metrics"]["good_vote_accuracy"]["games"], 0)
             self.assertEqual(report["quality_counts"]["unknown"], 1)
