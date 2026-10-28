@@ -34,6 +34,7 @@ class HumanGameRulesTests(unittest.TestCase):
         viewer_seat = next(
             seat for seat in self.engine.alive_seats()
             if seat not in {hunter_seat, target_seat}
+            and self.engine.roles[seat].camp != "狼人"
         )
         self.engine.human_seat = viewer_seat
         view = project_view(self.engine, viewer_seat=viewer_seat)
