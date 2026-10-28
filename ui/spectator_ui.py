@@ -351,9 +351,9 @@ def owner_panel(st, replay_root):
                         )
                         st.write(f"- **{metric['label']}：{shown}** {count}。{metric['definition']}")
                 if review["prompt_tuning_flags"]:
-                    with st.expander("复盘线索"):
-                        for flag in review["prompt_tuning_flags"]:
-                            st.write(f"- {flag}")
+                    st.markdown("**复盘线索**")
+                    for flag in review["prompt_tuning_flags"]:
+                        st.write(f"- {flag}")
                 events = review["events"]
                 if review["issue"]:
                     st.caption(review["issue"])
@@ -378,7 +378,8 @@ def owner_panel(st, replay_root):
                                 st.text(f"{prefix}{phase} · {seat}：{row['text']}")
                 else:
                     st.caption("没有可展示的公开事件；可继续查看下方复盘摘要。")
-                with st.expander("完整复盘摘要", expanded=False):
+                st.markdown("**完整复盘摘要**")
+                with st.container(height=450):
                     st.markdown(review["summary"])
 
     return playing
