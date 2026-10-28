@@ -382,8 +382,10 @@ def owner_panel(st, replay_root):
                                 st.text(f"{prefix}{phase} · {seat}：{row['text']}")
                 else:
                     st.caption("没有可展示的公开事件；可继续查看下方复盘摘要。")
-                st.markdown("**完整复盘摘要**")
+                st.markdown("**完整复盘摘要（按纯文本展示）**")
                 with st.container(height=450):
-                    st.markdown(review["summary"])
+                    # Archive text can contain model-generated Markdown; render it literally
+                    # so an archived speech cannot trigger remote image loads or HTML rendering.
+                    st.text(review["summary"])
 
     return playing
