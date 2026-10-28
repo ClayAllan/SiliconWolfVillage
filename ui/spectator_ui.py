@@ -1,6 +1,7 @@
 """Read-only spectator UI; no imports of model clients or game constructors."""
 import hashlib
 import json
+from heapq import nlargest
 from pathlib import Path
 import time
 import uuid
@@ -228,6 +229,15 @@ def owner_panel(st, replay_root):
     registry = get_registry()
     ss = st.session_state
     playing = False
+    try:
+        recent_dirs = nlargest(
+            100, (p for p in Path(replay_root).iterdir() if p.is_dir()),
+            key=lambda p: p.name,
+        )
+    except OSError:
+        recent_dirs = []
+    replay_dirs = [p for p in recent_dirs if (p / "replay_frames.jsonl").is_file()]
+    archive_dirs = [p for p in recent_dirs if (p / "manifest.json").is_file()]
     with st.expander("共享房间与独立回放"):
         st.caption("本机多浏览器可用。现有服务仅监听 127.0.0.1，尚未开放远程访问。下方原工作台始终显示实时对局。")
         receipts = ss.setdefault("owned_room_receipts", {})
@@ -274,9 +284,9 @@ def owner_panel(st, replay_root):
                 st.error(str(error))
         else:
             st.caption("创建新局前开启“共享观战与回放记录”即可生成房间。旧运行对象不自动接入。")
-        dirs = sorted(p for p in Path(replay_root).glob("*") if p.is_dir() and (p / "replay_frames.jsonl").exists())
+        dirs = replay_dirs
         if dirs:
-            choice = st.selectbox("本会话已记录档案", dirs, format_func=lambda p: p.name)
+            choice = st.selectbox("本会话最近 100 个目录中的已记录回放", dirs, format_func=lambda p: p.name)
             if st.button("打开归档回放房间"):
                 try:
                     replay = DisplayReplay.load(choice)
@@ -301,12 +311,6 @@ def owner_panel(st, replay_root):
                     st.error("文件不是可读取的旧归档。")
  
     with st.expander("📚 历史对局结构化复盘"):
-        archive_dirs = sorted(
-            (p for p in Path(replay_root).glob("*/manifest.json") if p.is_file()),
-            key=lambda p: p.parent.name,
-            reverse=True,
-        )
-        archive_dirs = [p.parent for p in archive_dirs[:100]]
         if not archive_dirs:
             st.caption("本会话还没有可读取的结构化档案。")
         else:
