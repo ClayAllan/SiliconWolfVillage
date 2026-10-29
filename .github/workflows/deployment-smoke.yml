@@ -29,7 +29,7 @@ jobs:
       - name: Wait for Streamlit Cloud to serve the expected build
         env:
           APP_URL: https://siliconwolfvillage.streamlit.app/
-          EXPECTED_MARKER: SWV-20261030-RELATIONSHIP-ZIP-CACHE
+          EXPECTED_MARKER: SWV-20261030-ARCHIVE-IMPORT-COMPAT
         run: |
           python - <<'PY'
           import os
@@ -57,17 +57,36 @@ jobs:
                       raise SystemExit(0)
                   except Exception as error:
                       last_error = f"{type(error).__name__}: {error}"
+                      try:
+                          title = page.title()
+                          body = " ".join(page.locator("body").inner_text(timeout=3000).split())
+                      except Exception as diagnostic_error:
+                          title = "unavailable"
+                          body = f"Could not read page text: {diagnostic_error}"
+
                       if attempt == 1 or attempt % 3 == 0:
-                          try:
-                              title = page.title()
-                              body = " ".join(page.locator("body").inner_text(timeout=3000).split())
-                          except Exception as diagnostic_error:
-                              title = "unavailable"
-                              body = f"Could not read page text: {diagnostic_error}"
                           print(
                               f"Deployment diagnostic attempt={attempt} HTTP={status} "
                               f"title={title!r} body_preview={body[:1600]!r}"
                           )
+
+                      if (
+                          "This app has encountered an error" in body
+                          or "ImportError:" in body
+                          or "Traceback:" in body
+                      ):
+                          try:
+                              page.screenshot(
+                                  path="streamlit-deployment-smoke-failure.png", full_page=True
+                              )
+                          except Exception as screenshot_error:
+                              print(f"Could not capture startup-error screenshot: {screenshot_error}")
+                          browser.close()
+                          raise SystemExit(
+                              f"Streamlit returned an app startup error (HTTP {status}): "
+                              f"{body[:1600]}"
+                          )
+
                       print(f"Deployment marker not visible yet (attempt {attempt}): {last_error}")
                       time.sleep(20)
 
