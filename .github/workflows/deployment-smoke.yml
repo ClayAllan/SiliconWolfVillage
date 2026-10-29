@@ -40,11 +40,14 @@ jobs:
           marker = f"部署验收标记：{os.environ['EXPECTED_MARKER']}"
           deadline = time.monotonic() + 600
           last_error = "marker not checked yet"
+          status = "not available"
+          attempt = 0
 
           with sync_playwright() as playwright:
               browser = playwright.chromium.launch()
               page = browser.new_page()
               while time.monotonic() < deadline:
+                  attempt += 1
                   try:
                       response = page.goto(url, wait_until="domcontentloaded", timeout=90000)
                       status = response.status if response else "no HTTP response"
@@ -54,7 +57,18 @@ jobs:
                       raise SystemExit(0)
                   except Exception as error:
                       last_error = f"{type(error).__name__}: {error}"
-                      print(f"Deployment marker not visible yet: {last_error}")
+                      if attempt == 1 or attempt % 3 == 0:
+                          try:
+                              title = page.title()
+                              body = " ".join(page.locator("body").inner_text(timeout=3000).split())
+                          except Exception as diagnostic_error:
+                              title = "unavailable"
+                              body = f"Could not read page text: {diagnostic_error}"
+                          print(
+                              f"Deployment diagnostic attempt={attempt} HTTP={status} "
+                              f"title={title!r} body_preview={body[:1600]!r}"
+                          )
+                      print(f"Deployment marker not visible yet (attempt {attempt}): {last_error}")
                       time.sleep(20)
 
               try:
