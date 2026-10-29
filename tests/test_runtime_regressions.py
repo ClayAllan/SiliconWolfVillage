@@ -206,7 +206,8 @@ class AsyncAgentTests(unittest.TestCase):
         manager._request_pool.shutdown(wait=True, cancel_futures=True)
 
     def test_wolf_playbook_includes_explicit_social_tactics(self):
-        engine = self.make_engine()
+        engine = GameEngine(MemoryOnlyManager())
+        engine.setup()
         wolf = engine.roles[engine.wolves[0]]
         prompt = wolf.get_playbook_prompt(engine)
         self.assertIn("反向金水", prompt)
