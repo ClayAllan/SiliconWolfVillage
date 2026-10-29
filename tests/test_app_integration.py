@@ -408,7 +408,7 @@ class AppIntegrationTests(unittest.TestCase):
         )
         self.app.run()
         self.assert_clean()
-        label = "⬇️ 生成并下载历史对局归档 ZIP"
+        label = "⬇️ 下载已准备的历史对局归档 ZIP"
         download = next(
             item for item in self.app.get("download_button")
             if item.label == label
