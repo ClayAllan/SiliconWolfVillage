@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
+import time
 import re
 import stat
 import zipfile
@@ -20,6 +22,8 @@ MAX_ARCHIVE_FILE_BYTES = 32 * 1024 * 1024
 MAX_ARCHIVE_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_ARCHIVE_ZIP_BYTES = 64 * 1024 * 1024
 MAX_ARCHIVE_CHOICES = 50
+
+_LOGGER = logging.getLogger(__name__)
 
 STANDARD_ARCHIVE_FILES = (
     "manifest.json",
@@ -69,6 +73,7 @@ def _validate_archive_directory(replay_root, archive_directory) -> Path:
 
 def build_private_archive_zip(replay_root, archive_directory) -> bytes:
     """Build a bounded, one-game ZIP; no recursive traversal or arbitrary files."""
+    started = time.monotonic()
     try:
         selected = _validate_archive_directory(replay_root, archive_directory)
     except (OSError, RuntimeError) as error:
@@ -107,8 +112,13 @@ def build_private_archive_zip(replay_root, archive_directory) -> bytes:
         raise ValueError("历史档案缺少 manifest.json")
 
     output = io.BytesIO()
+    _LOGGER.info(
+        "Private archive ZIP generation started: archive=%s files=%d source_bytes=%d",
+        selected.name, len(files), total,
+    )
     try:
-        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as dest:
+        # Level 1 is much faster for long JSONL transcripts while retaining compression.
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as dest:
             for name, path, expected_size in files:
                 # O_NOFOLLOW and fstat protect against last-second symlink substitution.
                 flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -132,11 +142,21 @@ def build_private_archive_zip(replay_root, archive_directory) -> bytes:
                 "仅供对局所有者保存和授权分析；不得作为公开观战包传播。\n"
                 "仅包含该局标准归档文件，不包含其他局的 index.csv 或 API Key。\n",
             )
-    except (OSError, zipfile.BadZipFile) as error:
-        raise ValueError("生成归档 ZIP 失败，请检查文件是否仍可读取") from error
+    except Exception as error:
+        _LOGGER.exception(
+            "Private archive ZIP generation failed: archive=%s elapsed_seconds=%.3f",
+            selected.name, time.monotonic() - started,
+        )
+        if isinstance(error, (OSError, zipfile.BadZipFile)):
+            raise ValueError("生成归档 ZIP 失败，请检查文件是否仍可读取") from error
+        raise
     data = output.getvalue()
     if len(data) > MAX_ARCHIVE_ZIP_BYTES:
         raise ValueError("压缩后的档案超过 64 MiB 内存下载上限")
+    _LOGGER.info(
+        "Private archive ZIP generation completed: archive=%s zip_bytes=%d elapsed_seconds=%.3f",
+        selected.name, len(data), time.monotonic() - started,
+    )
     return data
 
 def private_archive_zip_stream(replay_root, archive_directory) -> io.BytesIO:
