@@ -33,7 +33,7 @@ from ui.feed_ui import render_feed
 
 # 手动进度存档与自动终局档案分开保存。
 # 该标记用于区分线上实际运行的构建与尚未部署的 main/PR 代码。
-APP_BUILD_MARKER = "SWV-20261030-ARCHIVE-IMPORT-COMPAT"
+APP_BUILD_MARKER = "SWV-20261030-STARLETTE-141-FIX"
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Keep this key stable with storage.archive_zip.PRIVATE_ARCHIVE_ZIP_CACHE_KEY.
@@ -696,7 +696,7 @@ with st.sidebar:
                     disabled=auto_running or not _zip_agree or bool(_zip_error),
                     key="download_archive_zip",
                     use_container_width=True,
-                    help="勾选隐私确认后先准备一次 ZIP；下载文件会随页面自动刷新保持有效。",
+                    help="勾选隐私确认后先准备一次 ZIP；下载时直接使用缓存字节，不会重新压缩。",
                 )
                 if not _zip_agree:
                     st.caption("勾选隐私确认后，系统会准备 ZIP；完成后点击下载。")
@@ -704,7 +704,7 @@ with st.sidebar:
                     st.caption("自动推演期间暂停准备 ZIP；请先暂停对局。")
                 elif not _zip_error:
                     st.caption(
-                        f"ZIP 已在当前会话中准备并缓存（{len(_zip_data):,} bytes）；页面自动刷新不会重复压缩。"
+                        f"ZIP 已在当前会话中准备并缓存（{len(_zip_data):,} bytes）；页面刷新不会重复压缩。"
                     )
         else:
             # Do not retain a full private archive while a restricted human
