@@ -217,6 +217,9 @@ class AsyncAgentTests(unittest.TestCase):
         self.assertIn("警徽链", prompt)
         self.assertIn("代跳", prompt)
         self.assertIn("传话", prompt)
+        self.assertIn("关系链复盘动作", prompt)
+        self.assertIn("至少两种解释", prompt)
+        self.assertIn("代跳与传话动作", prompt)
 
     def test_token_usage_accumulates_and_survives_save_load(self):
         manager = self.make_manager()
@@ -353,6 +356,28 @@ class EngineRegressionTests(unittest.TestCase):
         self.assertIn("警徽关系链推理", facts)
         self.assertIn("故意甩锅", facts)
         self.assertIn("自爆只机械确认自爆者本人", facts)
+
+    def test_reverse_gold_claims_from_or_to_confirmed_wolves_trigger_relationship_audit(self):
+        engine = self.make_engine()
+        engine.day = 3
+        engine._log_player(4, "我是预言家。昨晚查验9号，金水。")
+        engine._log_player(8, "我是预言家。昨晚查验3号，金水。")
+        engine._confirm_role(4, "狼人", "公开自爆")
+        engine._confirm_role(3, "狼人", "公开自爆")
+
+        facts = engine._hard_facts_for(1)
+
+        self.assertIn(
+            "机械确认狼人4号曾公开给9号发金水/好人查验声明", facts
+        )
+        self.assertIn(
+            "8号曾公开给后来机械确认狼人3号发金水/好人查验声明", facts
+        )
+        self.assertIn("反向金水关系审计", facts)
+        self.assertIn("至少比较两种解释", facts)
+        # A relation is an audit lead, never a substitute for a hidden role fact.
+        self.assertNotIn("9号真实底牌", facts)
+        self.assertNotIn("8号真实底牌", facts)
 
     def test_consolidation_is_broadcast_as_non_binding_advice(self):
         engine = self.make_engine()
