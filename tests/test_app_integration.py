@@ -159,13 +159,14 @@ class AppIntegrationTests(unittest.TestCase):
         self.app.text_input[0].set_value("test-key-never-sent").run()
         with patch.object(GameEngine, "run", short_game):
             self.click("🎬 开始新游戏")
-        # 完整页面现在正常返回，测试需像浏览器的下一次定时刷新一样收集终局快照。
-        # Shared CI runners can be briefly loaded; allow the background service enough
-        # time without making the regression test depend on a tight 4-second scheduling window.
-        deadline = time.monotonic() + 8
-        while not self.app.session_state["game_service"].snapshot().done:
-            self.assertLess(time.monotonic(), deadline)
-            threading.Event().wait(.01)
+        # 等待后台服务完成时不要高频轮询 snapshot()：它会获取同一把服务锁并
+        # 深拷贝引擎状态，测试自身可能与正在推进的 worker 争抢锁。
+        # 通过服务条件变量等待真实的 done 通知，保留硬超时以检测真实卡死。
+        service = self.app.session_state["game_service"]
+        with service._condition:
+            completed = service._condition.wait_for(lambda: service._done, timeout=8)
+        self.assertTrue(completed, "后台服务未在 8 秒内完成；不是通过放宽断言掩盖超时。")
+        self.assertTrue(service.snapshot().done)
         self.app.run()
         self.assert_clean()
         self.assertTrue(self.app.session_state["done"])
