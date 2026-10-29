@@ -8,7 +8,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from storage.archive_zip import (
+    PRIVATE_ARCHIVE_ZIP_CACHE_KEY,
     build_private_archive_zip,
+    clear_cached_private_archive_zip,
+    get_or_build_cached_private_archive_zip,
     private_archive_zip_stream,
     recent_archive_directories,
 )
@@ -65,6 +68,27 @@ class PrivateArchiveZipTests(unittest.TestCase):
             self.assertEqual(package.read("20261029_game1/final_state.json").decode(),
                              (self.archive / "final_state.json").read_text())
             self.assertIn("PRIVATE_MEMORY", package.read("20261029_game1/memory.jsonl").decode())
+
+    def test_private_zip_cache_is_reused_across_reruns_and_invalidated_on_change(self):
+        state = {}
+        with patch(
+            "storage.archive_zip.build_private_archive_zip",
+            wraps=build_private_archive_zip,
+        ) as build:
+            first = get_or_build_cached_private_archive_zip(state, self.root, self.archive)
+            second = get_or_build_cached_private_archive_zip(state, self.root, self.archive)
+            self.assertEqual(first, second)
+            self.assertEqual(build.call_count, 1)
+            self.assertEqual(state[PRIVATE_ARCHIVE_ZIP_CACHE_KEY]["data"], first)
+
+            with (self.archive / "events.jsonl").open("a", encoding="utf-8") as events:
+                events.write('{"event":"new"}\\n')
+            third = get_or_build_cached_private_archive_zip(state, self.root, self.archive)
+            self.assertNotEqual(first, third)
+            self.assertEqual(build.call_count, 2)
+
+        clear_cached_private_archive_zip(state)
+        self.assertNotIn(PRIVATE_ARCHIVE_ZIP_CACHE_KEY, state)
 
     def test_deferred_download_stream_is_seekable_and_contains_valid_zip(self):
         stream = private_archive_zip_stream(self.root, self.archive)
