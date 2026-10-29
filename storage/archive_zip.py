@@ -198,8 +198,9 @@ def get_or_build_cached_private_archive_zip(state, replay_root, archive_director
     ):
         return cached["data"]
 
-    # Validate and build before replacing the previous cache. A failure never
-    # leaves a partial ZIP or falsely marks an invalid archive as ready.
+    # Drop stale bytes before building a changed selection. If validation or
+    # packaging fails, the previous archive must not remain cached accidentally.
+    state.pop(PRIVATE_ARCHIVE_ZIP_CACHE_KEY, None)
     data = build_private_archive_zip(replay_root, archive_directory)
     state[PRIVATE_ARCHIVE_ZIP_CACHE_KEY] = {
         "signature": signature,
