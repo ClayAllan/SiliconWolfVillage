@@ -26,6 +26,14 @@ from ui.ui_runtime import AUTO_POLL_SECONDS
 from service.live_feed import schedule_page_refresh
 from ui.feed_ui import render_feed
 
+
+def _make_archive_zip_download(root, archive):
+    """Create a zero-argument deferred callback for Streamlit's download API."""
+    def _generate_archive_zip():
+        return io.BytesIO(build_private_archive_zip(root, archive))
+
+    return _generate_archive_zip
+
 # 手动进度存档与自动终局档案分开保存。
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -602,9 +610,7 @@ with st.sidebar:
                 )
                 st.download_button(
                     "⬇️ 生成并下载历史对局归档 ZIP",
-                    data=lambda root=REPLAY_DIR, archive=_selected_history: io.BytesIO(
-                        build_private_archive_zip(root, archive)
-                    ),
+                    data=_make_archive_zip_download(REPLAY_DIR, _selected_history),
                     file_name=f"siliconwolfvillage-history-{_selected_history.name}.zip",
                     mime="application/zip",
                     on_click="ignore",
