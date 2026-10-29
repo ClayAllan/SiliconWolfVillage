@@ -7,6 +7,7 @@ import json
 import os
 import time
 import uuid
+from pathlib import Path
 
 import streamlit as st
 
@@ -17,11 +18,10 @@ from service.view_projection import project_view, faction_counts, project_api_he
 from agent.model_protocol import ERROR_LABELS
 from storage.session_storage import storage_paths
 from storage.save_package import store_uploaded_save, MAX_SAVE_PACKAGE_BYTES
-from storage.archive_zip import (
-    clear_cached_private_archive_zip,
-    get_or_build_cached_private_archive_zip,
-    recent_archive_directories,
-)
+# Import only the long-standing archive API. Keep session-cache helpers local so
+# a staggered Streamlit Cloud rollout cannot fail at startup when app.py is newer
+# than storage/archive_zip.py.
+from storage.archive_zip import build_private_archive_zip, recent_archive_directories
 from agent.ai_agent import AgentManager
 from storage.game_archive import game_statistics
 from engine.game_engine import GameEngine
@@ -35,6 +35,71 @@ from ui.feed_ui import render_feed
 # 该标记用于区分线上实际运行的构建与尚未部署的 main/PR 代码。
 APP_BUILD_MARKER = "SWV-20261030-RELATIONSHIP-ZIP-CACHE"
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Keep this key stable with storage.archive_zip.PRIVATE_ARCHIVE_ZIP_CACHE_KEY.
+# The cache wrappers intentionally live in app.py to avoid importing newly added
+# helpers from an older, still-running Streamlit Cloud checkout.
+PRIVATE_ARCHIVE_ZIP_CACHE_KEY = "_private_archive_zip_cache"
+_ARCHIVE_ZIP_SIGNATURE_FILES = (
+    "manifest.json",
+    "summary.md",
+    "final_state.json",
+    "events.jsonl",
+    "api_calls.jsonl",
+    "memory.jsonl",
+    "runtime.log",
+    "replay_frames.jsonl",
+    "replay_items.jsonl",
+    "replay_manifest.json",
+    "session.json",
+)
+
+
+def clear_cached_private_archive_zip(state) -> None:
+    """Discard the session's private ZIP when the user withdraws consent."""
+    state.pop(PRIVATE_ARCHIVE_ZIP_CACHE_KEY, None)
+
+
+def _private_archive_signature(replay_root, archive_directory) -> tuple:
+    """Fingerprint allowlisted archive files without following symlinks."""
+    root = Path(replay_root).absolute()
+    selected = Path(archive_directory).absolute()
+    files = []
+    for name in _ARCHIVE_ZIP_SIGNATURE_FILES:
+        path = selected / name
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            files.append((name, None))
+        except OSError as error:
+            raise ValueError(f"无法检查档案文件：{name}") from error
+        else:
+            files.append((
+                name, info.st_mode, info.st_size, info.st_mtime_ns,
+                getattr(info, "st_ctime_ns", None), info.st_ino,
+            ))
+    return str(root), str(selected), tuple(files)
+
+
+def get_or_build_cached_private_archive_zip(state, replay_root, archive_directory) -> bytes:
+    """Build a private ZIP once per selected archive and reuse it across reruns."""
+    signature = _private_archive_signature(replay_root, archive_directory)
+    cached = state.get(PRIVATE_ARCHIVE_ZIP_CACHE_KEY)
+    if (
+        isinstance(cached, dict)
+        and cached.get("signature") == signature
+        and isinstance(cached.get("data"), bytes)
+    ):
+        return cached["data"]
+
+    state.pop(PRIVATE_ARCHIVE_ZIP_CACHE_KEY, None)
+    data = build_private_archive_zip(replay_root, archive_directory)
+    state[PRIVATE_ARCHIVE_ZIP_CACHE_KEY] = {
+        "signature": signature,
+        "archive_name": Path(archive_directory).name,
+        "data": data,
+    }
+    return data
 
 
 # ============================================================
