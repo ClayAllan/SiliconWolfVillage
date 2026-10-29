@@ -523,10 +523,9 @@ class GameEngine:
                 for s, info in sorted(self.confirmed_roles.items())
             )
             lines.append("- 全场机械确认身份：" + confirmed + "。")
-        wolf_roles = {"狼人", "白狼王", "狼美人"}
         confirmed_wolves = {
             int(s) for s, info in self.confirmed_roles.items()
-            if info.get("role") in wolf_roles
+            if getattr(config.ROLE_CLASSES.get(info.get("role")), "camp", "") == "狼人"
         }
         if self.badge_history:
             transfers = "；".join(
