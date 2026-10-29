@@ -1,4 +1,4 @@
-"""End-to-end browser test for Streamlit's deferred ZIP download delivery."""
+"""Diagnostic end-to-end test for Streamlit ZIP download delivery modes."""
 from __future__ import annotations
 
 import os
@@ -18,7 +18,12 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "tests" / "fixtures" / "download_button_smoke_app.py"
 BASE_URL = "http://127.0.0.1:8501"
 HEALTH_URL = f"{BASE_URL}/_stcore/health"
-EXPECTED_FILENAME = "private-archive-smoke.zip"
+VARIANTS = (
+    ("Download ZIP bytes ignore", "bytes-ignore.zip"),
+    ("Download ZIP callable ignore", "callable-ignore.zip"),
+    ("Download ZIP bytes rerun", "bytes-rerun.zip"),
+    ("Download ZIP callable rerun", "callable-rerun.zip"),
+)
 
 
 def wait_for_server(process: subprocess.Popen[str]) -> None:
@@ -64,38 +69,63 @@ def main() -> None:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch()
                 page = browser.new_page(accept_downloads=True)
-                page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30000)
-                button = page.get_by_role("button", name="Download ZIP fixture")
-                button.wait_for(state="visible", timeout=30000)
 
-                for index in range(2):
-                    with page.expect_download(timeout=20000) as download_info:
-                        button.click()
-                    download = download_info.value
-                    if download.failure():
-                        raise AssertionError(f"Download {index + 1} failed: {download.failure()}")
-                    if download.suggested_filename != EXPECTED_FILENAME:
-                        raise AssertionError(
-                            "Browser did not receive the intended filename: "
-                            f"{download.suggested_filename!r}"
+                def log_response(response) -> None:
+                    if "download" in response.url.lower() or "/media/" in response.url:
+                        print(
+                            f"HTTP {response.status} {response.url} "
+                            f"content-type={response.headers.get('content-type')!r}"
                         )
 
-                    output = Path(temp_dir) / f"download-{index + 1}.zip"
-                    download.save_as(output)
-                    with zipfile.ZipFile(output) as archive:
-                        if archive.testzip() is not None:
-                            raise AssertionError(f"Download {index + 1} is a corrupt ZIP")
-                        names = set(archive.namelist())
-                        if "fixture/manifest.json" not in names:
-                            raise AssertionError(f"Download {index + 1} lacks manifest.json")
-                        manifest = archive.read("fixture/manifest.json").decode("utf-8")
-                        if "browser-download-smoke" not in manifest:
-                            raise AssertionError(f"Download {index + 1} has unexpected content")
-                    print(
-                        f"Browser download {index + 1}/2 passed: "
-                        f"{download.suggested_filename}, {output.stat().st_size} bytes, valid ZIP"
-                    )
+                def log_failed_request(request) -> None:
+                    if "download" in request.url.lower() or "/media/" in request.url:
+                        print(f"REQUEST FAILED {request.url}: {request.failure}")
+
+                page.on("response", log_response)
+                page.on("requestfailed", log_failed_request)
+                page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30000)
+                successes: list[str] = []
+                failures: list[str] = []
+
+                for index, (label, expected_filename) in enumerate(VARIANTS, start=1):
+                    try:
+                        button = page.get_by_role("button", name=label)
+                        button.wait_for(state="visible", timeout=15000)
+                        with page.expect_download(timeout=15000) as download_info:
+                            button.click()
+                        download = download_info.value
+                        output = Path(temp_dir) / f"download-{index}.zip"
+                        download.save_as(output)
+                        failure = download.failure()
+                        if failure:
+                            raise AssertionError(f"browser reported {failure!r}")
+                        if download.suggested_filename != expected_filename:
+                            raise AssertionError(
+                                f"filename {download.suggested_filename!r}, "
+                                f"expected {expected_filename!r}"
+                            )
+                        with zipfile.ZipFile(output) as archive:
+                            if archive.testzip() is not None:
+                                raise AssertionError("corrupt ZIP")
+                            names = set(archive.namelist())
+                            if "fixture/manifest.json" not in names:
+                                raise AssertionError("missing fixture/manifest.json")
+                            manifest = archive.read("fixture/manifest.json").decode("utf-8")
+                            if "browser-download-smoke" not in manifest:
+                                raise AssertionError("unexpected manifest contents")
+                        successes.append(label)
+                        print(
+                            f"VARIANT PASS: {label}; {download.suggested_filename}; "
+                            f"{output.stat().st_size} bytes; valid ZIP"
+                        )
+                    except Exception as error:
+                        failures.append(label)
+                        print(f"VARIANT FAIL: {label}: {type(error).__name__}: {error}")
+
                 browser.close()
+                print(f"DOWNLOAD MATRIX: successes={successes!r}; failures={failures!r}")
+                if failures:
+                    raise AssertionError(f"Download variants failed: {failures!r}")
     except Exception:
         if process.poll() is None:
             process.terminate()
