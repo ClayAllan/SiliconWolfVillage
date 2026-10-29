@@ -29,7 +29,7 @@ jobs:
       - name: Wait for Streamlit Cloud to serve the expected build
         env:
           APP_URL: https://siliconwolfvillage.streamlit.app/
-          EXPECTED_MARKER: SWV-20261030-RELATIONSHIP-ZIP-CACHE
+          EXPECTED_MARKER: SWV-20261030-ARCHIVE-IMPORT-COMPAT
         run: |
           python - <<'PY'
           import os
@@ -43,6 +43,33 @@ jobs:
           status = "not available"
           attempt = 0
 
+          def frame_diagnostics(page):
+              snapshots = []
+              for index, frame in enumerate(page.frames):
+                  try:
+                      body = " ".join(frame.locator("body").inner_text(timeout=1500).split())
+                  except Exception as error:
+                      body = f"<body unavailable: {type(error).__name__}: {error}>"
+                  snapshots.append({
+                      "index": index,
+                      "url": frame.url,
+                      "body_preview": body[:900],
+                  })
+              return snapshots
+
+          def find_marker_frame(page, expected_text, timeout_seconds=20):
+              marker_deadline = time.monotonic() + timeout_seconds
+              while time.monotonic() < marker_deadline:
+                  for frame in list(page.frames):
+                      try:
+                          match = frame.get_by_text(expected_text, exact=True)
+                          if match.count() and match.first.is_visible():
+                              return frame
+                      except Exception:
+                          continue
+                  time.sleep(1)
+              return None
+
           with sync_playwright() as playwright:
               browser = playwright.chromium.launch()
               page = browser.new_page()
@@ -51,23 +78,42 @@ jobs:
                   try:
                       response = page.goto(url, wait_until="domcontentloaded", timeout=90000)
                       status = response.status if response else "no HTTP response"
-                      page.get_by_text(marker, exact=True).wait_for(state="visible", timeout=20000)
-                      print(f"Deployed Streamlit build confirmed: {marker}; HTTP {status}")
+                      marker_frame = find_marker_frame(page, marker, timeout_seconds=20)
+                      if marker_frame is None:
+                          raise TimeoutError(f"build marker not found in any of {len(page.frames)} frames")
+                      print(
+                          f"Deployed Streamlit build confirmed: {marker}; HTTP {status}; "
+                          f"frame={marker_frame.url}"
+                      )
                       browser.close()
                       raise SystemExit(0)
                   except Exception as error:
                       last_error = f"{type(error).__name__}: {error}"
+                      snapshots = frame_diagnostics(page)
+                      body = " | ".join(item["body_preview"] for item in snapshots)
                       if attempt == 1 or attempt % 3 == 0:
-                          try:
-                              title = page.title()
-                              body = " ".join(page.locator("body").inner_text(timeout=3000).split())
-                          except Exception as diagnostic_error:
-                              title = "unavailable"
-                              body = f"Could not read page text: {diagnostic_error}"
                           print(
                               f"Deployment diagnostic attempt={attempt} HTTP={status} "
-                              f"title={title!r} body_preview={body[:1600]!r}"
+                              f"title={page.title()!r} frames={snapshots!r}"
                           )
+
+                      if (
+                          "This app has encountered an error" in body
+                          or "ImportError:" in body
+                          or "Traceback:" in body
+                      ):
+                          try:
+                              page.screenshot(
+                                  path="streamlit-deployment-smoke-failure.png", full_page=True
+                              )
+                          except Exception as screenshot_error:
+                              print(f"Could not capture startup-error screenshot: {screenshot_error}")
+                          browser.close()
+                          raise SystemExit(
+                              f"Streamlit returned an app startup error (HTTP {status}): "
+                              f"{body[:1600]}"
+                          )
+
                       print(f"Deployment marker not visible yet (attempt {attempt}): {last_error}")
                       time.sleep(20)
 

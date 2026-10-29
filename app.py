@@ -33,7 +33,7 @@ from ui.feed_ui import render_feed
 
 # 手动进度存档与自动终局档案分开保存。
 # 该标记用于区分线上实际运行的构建与尚未部署的 main/PR 代码。
-APP_BUILD_MARKER = "SWV-20261030-RELATIONSHIP-ZIP-CACHE"
+APP_BUILD_MARKER = "SWV-20261030-ARCHIVE-IMPORT-COMPAT"
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Keep this key stable with storage.archive_zip.PRIVATE_ARCHIVE_ZIP_CACHE_KEY.
