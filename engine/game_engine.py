@@ -39,7 +39,8 @@ WOLF_KILL_TACTICS = (
     "【狼队分工】不仅定刀口，还要安排白天主悍跳/代跳、深水/倒钩、压身份/抗推与归票位；不要求每局全用，避免所有狼同线机械互保。"
     "【反向金水/做身份】给队友金水可以建立可信关系，也会留下关系链；给好人金水可借势或留后手。评估发金水者、时机、接收者后续站边和票型，不把金水直接当真或假。"
     "【警徽链】若狼自爆/出局后把警徽交给X，X可能是队友接力，也可能是被故意甩锅的好人；预判好人会怎样反盘，不能只凭交徽定狼或定好。"
-    "【代跳与传话】确定谁冒充预言家/神职、报什么可自洽的查验、警徽流及何时退水；队友通过合理站边、质疑和归票承接战术，避免明显暗号、互相强保或捏造引擎事实。"
+    "【关系链执行】先检查事实账本中实际存在的金水/查验声明和警徽流转；若涉及机械确认狼，必须选一条最相关关系，比较至少两种解释并指出下一轮可核验的发言、站边或票型。没有相关证据就明确不适用，不得编造。"
+    "【代跳与传话执行】讨论时明确是否需要主悍跳、代跳接力、深水倒钩、压身份/抗推与归票；可决定不采用。传话应通过自洽的公开站边、质疑和归票完成，不用明显暗号，也不要求所有狼机械同边。"
     "【风险控制】每次只选最符合当前局势的1—2个策略，明确目标、收益、暴露风险和备选方案。"
     "只根据本局实际存在角色与已知信息决策，不把未公开的底牌当作公开共识。"
 )
@@ -522,6 +523,10 @@ class GameEngine:
                 for s, info in sorted(self.confirmed_roles.items())
             )
             lines.append("- 全场机械确认身份：" + confirmed + "。")
+        confirmed_wolves = {
+            int(s) for s, info in self.confirmed_roles.items()
+            if getattr(config.ROLE_CLASSES.get(info.get("role")), "camp", "") == "狼人"
+        }
         if self.badge_history:
             transfers = "；".join(
                 f"D{item.get('day', '?')}：{item.get('from')}号→{item.get('to')}号"
@@ -533,18 +538,16 @@ class GameEngine:
                 "但也可能是交徽者故意甩锅。结合接徽者后续站边、归票、投票、查验链和狼队收益判断，"
                 "不能仅凭交徽定狼或定好。"
             )
-            wolf_roles = {"狼人", "白狼王", "狼美人"}
-            confirmed_wolves = {
-                int(s) for s, info in self.confirmed_roles.items()
-                if info.get("role") in wolf_roles
-            }
             alerts = []
             for item in self.badge_history:
                 source, target = int(item.get("from", 0)), int(item.get("to", 0))
                 if target in confirmed_wolves:
                     alerts.append(f"{source}号曾把警徽交给后来机械确认的狼人{target}号")
                 if source in confirmed_wolves:
-                    alerts.append(f"机械确认的狼人{source}号曾把警徽交给{target}号")
+                    alerts.append(
+                        f"机械确认的狼人{source}号曾把警徽交给{target}号"
+                        "（接徽者需比较队友接力与故意甩锅给好人两种解释）"
+                    )
             if alerts:
                 lines.append(
                     "- 关系审计警报（高风险关联，但不是自动定狼）："
@@ -561,11 +564,55 @@ class GameEngine:
             lines.append("- 公开查验声明（主语和宾语绝不可改写；声明者未必是真预言家）：" + "；".join(
                 f"{c['seat']}号声称查验{c['target']}号为{c['result']}" for c in check_claims
             ) + "。")
+            claim_pairs = []
+            for claim in check_claims:
+                try:
+                    issuer = int(claim.get("seat"))
+                    target = int(claim.get("target"))
+                except (TypeError, ValueError):
+                    continue
+                claim_pairs.append(
+                    f"{issuer}号→{target}号（声明查验{claim.get('result', '未知')}）"
+                )
+            if claim_pairs:
+                lines.append(
+                    "- 金水/查验关系链（全部是公开声明，不是身份认证）：" + "；".join(claim_pairs) + "。"
+                )
+                lines.append(
+                    "- 对每条‘好人/金水’声明，先判断发言者是否真预言家，再比较至少两种解释："
+                    "狼给队友做身份、狼给好人金水以便利用/甩锅、或真预言家报出真实结果。"
+                    "核对接收者后续站边、投票、对跳与谁获益；不要把金水当硬身份，也不要要求每名玩家机械重复。"
+                )
             lines.append(
                 "- 反向金水分析：若发金水者可能是狼，接收者可能是队友被做身份，也可能是被利用或甩锅的好人；"
                 "被金水者反水也可能是独立判断或狼人切割。结合对跳、发言时间线、警徽流、票型和后续行为比较解释，"
                 "不能自动认好或认狼。"
             )
+            relation_alerts = []
+            for claim in check_claims:
+                if claim.get("result") != "好人":
+                    continue
+                try:
+                    issuer = int(claim.get("seat"))
+                    target = int(claim.get("target"))
+                except (TypeError, ValueError):
+                    continue
+                if issuer in confirmed_wolves:
+                    relation_alerts.append(
+                        f"机械确认狼人{issuer}号曾公开给{target}号发金水/好人查验声明；"
+                        "审查目标是否队友被做身份，也要考虑该狼故意给好人发金水以便后续甩锅"
+                    )
+                if target in confirmed_wolves:
+                    relation_alerts.append(
+                        f"{issuer}号曾公开给后来机械确认狼人{target}号发金水/好人查验声明；"
+                        "需审查声明者的身份、发言时机与后续票型，但不能仅凭这条声明认定双方同阵营"
+                    )
+            if relation_alerts:
+                lines.append(
+                    "- 反向金水关系审计（基于公开声明与机械确认事实，不自动定性）："
+                    + "；".join(dict.fromkeys(relation_alerts))
+                    + "。至少比较两种解释，并用后续站边、投票或公开声明验证"
+                )
         if self.objective_events:
             lines.append("- 最近公开客观事件：" + "｜".join(self.objective_events[-24:]))
         lines.append(
@@ -1283,10 +1330,12 @@ class GameEngine:
                                "这些队友已出局，只能参与本夜讨论与落刀，不计入存活人数。") if last_stand_mates else ""
             prompt = (f"【{self.phase}·狼人战术讨论】{status_note}你的存活狼队友：{mates}。当前存活：{self.alive_str()}。\n"
                       f"狼队此前发言：\n{prev_text}\n"
-                      f"请和队友简短商量今晚战术与明天分工：刀谁；明天谁【起跳预言家】、谁【倒钩】(伪装好人、混进好人阵营冲票)、"
-                      f"谁压身份；是否考虑【自刀】(刀自己人骗取好人信任，高风险慎用)。"
-                      f"原则：稳健、以胜利为目标、别乱玩。\n{WOLF_KILL_TACTICS}\n"
-                      f"speech输出你的战术建议(50-120字)。")
+                      "不要只重复战术名。先检查事实账本中的金水/查验声明和警徽链；若存在与机械确认狼有关的关系，挑最相关一条，"
+                      "比较至少两种解释，并说明下一轮如何通过公开发言、站边或票型验证；没有相关事实时不要硬编。"
+                      "再明确明天是否安排主悍跳/代跳、深水倒钩、压身份/抗推与归票/传话分工；可以选择不使用某项并说明理由。"
+                      "是否考虑自刀需比较实际收益与失去一名狼的代价，不能为了观赏性机械自刀。"
+                      f"原则：稳健、以胜利为目标、队友不必机械同边。\n{WOLF_KILL_TACTICS}\n"
+                      f"speech输出简短可执行的战术建议(60-140字)。")
             yield from self._ask(w, prompt, f"{label} 狼人讨论")
             wolf_talk.append((w, self._last_resp["speech"]))
             self.current_wolf_talk = list(wolf_talk)

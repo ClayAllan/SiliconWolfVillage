@@ -53,6 +53,7 @@ class PrivateArchiveZipTests(unittest.TestCase):
     def test_private_zip_contains_exactly_one_game_and_standard_forensic_files(self):
         data = build_private_archive_zip(self.root, self.archive)
         with zipfile.ZipFile(io.BytesIO(data)) as package:
+            self.assertIsNone(package.testzip(), "generated ZIP must pass CRC validation")
             names = set(package.namelist())
             self.assertIn("20261029_game1/manifest.json", names)
             self.assertIn("20261029_game1/final_state.json", names)

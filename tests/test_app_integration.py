@@ -428,6 +428,9 @@ class AppIntegrationTests(unittest.TestCase):
             if item.label == label
         )
         self.assertFalse(download.disabled)
+        captions = [item.value for item in self.app.caption]
+        self.assertTrue(any("部署验收标记：SWV-20261030-RELATIONSHIP-ZIP-CACHE" in value for value in captions))
+        self.assertTrue(any("ZIP 已在当前会话中准备并缓存" in value and "bytes" in value for value in captions))
         # Consent prepares the ZIP once. The ordinary download widget must
         # keep re-registering the same bytes across full-page auto-refresh reruns.
         cached = self.app.session_state[PRIVATE_ARCHIVE_ZIP_CACHE_KEY]
