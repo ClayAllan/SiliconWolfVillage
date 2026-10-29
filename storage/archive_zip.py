@@ -22,6 +22,7 @@ MAX_ARCHIVE_FILE_BYTES = 32 * 1024 * 1024
 MAX_ARCHIVE_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_ARCHIVE_ZIP_BYTES = 64 * 1024 * 1024
 MAX_ARCHIVE_CHOICES = 50
+PRIVATE_ARCHIVE_ZIP_CACHE_KEY = "_private_archive_zip_cache"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -159,10 +160,60 @@ def build_private_archive_zip(replay_root, archive_directory) -> bytes:
     )
     return data
 
-def private_archive_zip_stream(replay_root, archive_directory) -> io.BytesIO:
-    """Return a seekable stream for Streamlit's deferred-download API.
+def _archive_signature(replay_root, archive_directory) -> tuple:
+    """Return a cheap cache key for the allowlisted files without following symlinks."""
+    root = Path(replay_root).absolute()
+    selected = Path(archive_directory).absolute()
+    files = []
+    for name in STANDARD_ARCHIVE_FILES:
+        path = selected / name
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            files.append((name, None))
+        except OSError as error:
+            raise ValueError(f"无法检查档案文件：{name}") from error
+        else:
+            files.append((
+                name, info.st_mode, info.st_size, info.st_mtime_ns,
+                getattr(info, "st_ctime_ns", None), info.st_ino,
+            ))
+    return str(root), str(selected), tuple(files)
 
-    The stream is created only when the user clicks Download, not during every
-    page rerun. This also lets Streamlit surface packaging errors in the widget.
+
+def get_or_build_cached_private_archive_zip(state, replay_root, archive_directory) -> bytes:
+    """Build one private ZIP per session/selected archive and reuse it across reruns.
+
+    The returned bytes are intended for the regular (non-deferred) Streamlit
+    download button. Its media file is then associated with the current session
+    on every rerun, preventing the auto-refresh loop from pruning an in-flight
+    deferred download.
     """
+    signature = _archive_signature(replay_root, archive_directory)
+    cached = state.get(PRIVATE_ARCHIVE_ZIP_CACHE_KEY)
+    if (
+        isinstance(cached, dict)
+        and cached.get("signature") == signature
+        and isinstance(cached.get("data"), bytes)
+    ):
+        return cached["data"]
+
+    # Validate and build before replacing the previous cache. A failure never
+    # leaves a partial ZIP or falsely marks an invalid archive as ready.
+    data = build_private_archive_zip(replay_root, archive_directory)
+    state[PRIVATE_ARCHIVE_ZIP_CACHE_KEY] = {
+        "signature": signature,
+        "archive_name": Path(archive_directory).name,
+        "data": data,
+    }
+    return data
+
+
+def clear_cached_private_archive_zip(state) -> None:
+    """Discard the current session's private ZIP when consent is withdrawn."""
+    state.pop(PRIVATE_ARCHIVE_ZIP_CACHE_KEY, None)
+
+
+def private_archive_zip_stream(replay_root, archive_directory) -> io.BytesIO:
+    """Return a seekable stream for tests and non-UI callers."""
     return io.BytesIO(build_private_archive_zip(replay_root, archive_directory))
