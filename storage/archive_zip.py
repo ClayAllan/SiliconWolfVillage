@@ -142,9 +142,14 @@ def build_private_archive_zip(replay_root, archive_directory) -> bytes:
                 "仅供对局所有者保存和授权分析；不得作为公开观战包传播。\n"
                 "仅包含该局标准归档文件，不包含其他局的 index.csv 或 API Key。\n",
             )
-    except (OSError, zipfile.BadZipFile) as error:
-        _LOGGER.exception("Private archive ZIP generation failed: archive=%s", selected.name)
-        raise ValueError("生成归档 ZIP 失败，请检查文件是否仍可读取") from error
+    except Exception as error:
+        _LOGGER.exception(
+            "Private archive ZIP generation failed: archive=%s elapsed_seconds=%.3f",
+            selected.name, time.monotonic() - started,
+        )
+        if isinstance(error, (OSError, zipfile.BadZipFile)):
+            raise ValueError("生成归档 ZIP 失败，请检查文件是否仍可读取") from error
+        raise
     data = output.getvalue()
     if len(data) > MAX_ARCHIVE_ZIP_BYTES:
         raise ValueError("压缩后的档案超过 64 MiB 内存下载上限")
