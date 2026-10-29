@@ -209,6 +209,9 @@ class AsyncAgentTests(unittest.TestCase):
         engine = GameEngine(MemoryOnlyManager())
         engine.setup()
         wolf = engine.roles[engine.wolves[0]]
+        private_memory = wolf.get_private_memory(engine)
+        self.assertIn("反向金水", private_memory)
+        self.assertIn("传话", private_memory)
         prompt = wolf.get_playbook_prompt(engine)
         self.assertIn("反向金水", prompt)
         self.assertIn("警徽链", prompt)
