@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from storage.archive_zip import (
     build_private_archive_zip,
+    private_archive_zip_stream,
     recent_archive_directories,
 )
 
@@ -64,6 +65,16 @@ class PrivateArchiveZipTests(unittest.TestCase):
             self.assertEqual(package.read("20261029_game1/final_state.json").decode(),
                              (self.archive / "final_state.json").read_text())
             self.assertIn("PRIVATE_MEMORY", package.read("20261029_game1/memory.jsonl").decode())
+
+    def test_deferred_download_stream_is_seekable_and_contains_valid_zip(self):
+        stream = private_archive_zip_stream(self.root, self.archive)
+        self.assertTrue(stream.seekable())
+        with zipfile.ZipFile(stream) as package:
+            self.assertIn("20261029_game1/manifest.json", package.namelist())
+            self.assertIn("20261029_game1/PRIVATE_ARCHIVE_NOTICE.txt", package.namelist())
+            self.assertIn("PRIVATE_MEMORY", package.read(
+                "20261029_game1/memory.jsonl"
+            ).decode("utf-8"))
 
     def test_rejects_other_session_and_path_traversal(self):
         with tempfile.TemporaryDirectory() as unrelated:
