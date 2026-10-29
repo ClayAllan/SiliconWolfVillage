@@ -390,9 +390,6 @@ class AppIntegrationTests(unittest.TestCase):
 
 
     def test_private_archive_zip_download_requires_owner_consent(self):
-        import io
-        import zipfile
-
         archived = self.replays / "20261029_zip_fixture"
         archived.mkdir()
         (archived / "manifest.json").write_text(
@@ -403,44 +400,40 @@ class AppIntegrationTests(unittest.TestCase):
             json.dumps({"reasoning_log": {"1": "PRIVATE_ONLY"}}, ensure_ascii=False),
             encoding="utf-8",
         )
-        (archived / "events.jsonl").write_text('{"event":"public_log"}\\n', encoding="utf-8")
+        (archived / "events.jsonl").write_text(
+            '{"event":"public_log"}\\n', encoding="utf-8"
+        )
         self.app.run()
         self.assert_clean()
-        prepare = next(
-            item for item in self.app.button
-            if item.label == "📦 生成历史对局归档 ZIP"
+        label = "⬇️ 生成并下载历史对局归档 ZIP"
+        download = next(
+            item for item in self.app.get("download_button")
+            if item.label == label
         )
-        self.assertTrue(prepare.disabled)
-        self.assertFalse(any(
-            item.label == "⬇️ 下载历史对局归档 ZIP"
-            for item in self.app.get("download_button")
-        ))
+        self.assertTrue(download.disabled)
+        self.assertNotIn("prepared_archive_zip", self.app.session_state)
+
         agreement = next(
             item for item in self.app.checkbox
             if item.label == "我了解这是一份包含私密信息的完整归档"
         )
         agreement.check().run()
         self.assert_clean()
-        self.click("📦 生成历史对局归档 ZIP")
-
-        payload = self.app.session_state["prepared_archive_zip"]
-        self.assertEqual(payload["source"], str(archived))
-        with zipfile.ZipFile(io.BytesIO(payload["data"])) as package:
-            self.assertIn("20261029_zip_fixture/manifest.json", package.namelist())
-            self.assertIn("PRIVATE_ONLY", package.read(
-                "20261029_zip_fixture/final_state.json"
-            ).decode("utf-8"))
-        self.assertTrue(any(
-            item.label == "⬇️ 下载历史对局归档 ZIP"
-            for item in self.app.get("download_button")
-        ))
+        download = next(
+            item for item in self.app.get("download_button")
+            if item.label == label
+        )
+        self.assertFalse(download.disabled)
+        # The archive is built lazily when the browser requests the download;
+        # AppTest must not eagerly build or retain a duplicate ZIP in session state.
+        self.assertNotIn("prepared_archive_zip", self.app.session_state)
 
         # An unfinished restricted human perspective may not access the full ZIP.
         self.app.session_state["viewer_mode"] = "单一视角"
         self.app.run()
         self.assert_clean()
         self.assertFalse(any(
-            item.label == "⬇️ 下载历史对局归档 ZIP"
+            item.label == label
             for item in self.app.get("download_button")
         ))
 
