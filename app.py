@@ -641,7 +641,6 @@ with st.sidebar:
                     st.caption(
                         f"ZIP 已在当前会话中准备并缓存（{len(_zip_data):,} bytes）；页面自动刷新不会重复压缩。"
                     )
-                    st.caption(f"部署验收标记：{APP_BUILD_MARKER}")
         else:
             # Do not retain a full private archive while a restricted human
             # perspective is active and the game has not ended.
@@ -935,6 +934,7 @@ sheriff = engine.sheriff if engine else None
 with heading_slot:
     st.markdown(design.header(engine, demo=is_preview, running=ss.running and not is_preview), unsafe_allow_html=True)
     st.markdown('<div class="wv-intro"><div><h1>让推理，发生在圆桌之上。</h1><p>十二个 AI 的身份博弈，从每一句发言开始。</p></div></div>', unsafe_allow_html=True)
+    st.caption(f"部署验收标记：{APP_BUILD_MARKER}")
 with overview_slot:
     st.markdown(design.overview(engine, current_token_usage(live_engine), demo=is_preview), unsafe_allow_html=True)
 

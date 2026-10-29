@@ -394,6 +394,40 @@ class EngineRegressionTests(unittest.TestCase):
         self.assertIn("仍须独立核验证据", joined)
         self.assertNotIn("好人请围绕它集火", joined)
 
+    def test_wolf_night_discussion_requests_actionable_relationship_strategy(self):
+        engine = self.make_engine()
+        captured = []
+        alive_good = next(
+            seat for seat in engine.alive_seats()
+            if engine.roles[seat].camp != "狼人"
+        )
+
+        def fake_ask(seat, prompt, label, public=False, response_kind="speech", allowed_targets=None):
+            captured.append((seat, prompt, label, response_kind))
+            if response_kind == "vote":
+                engine._last_resp = {
+                    "reasoning": "测试落刀", "speech": "", "vote_target": alive_good,
+                }
+            else:
+                engine._last_resp = {
+                    "reasoning": "测试分工", "speech": f"{seat}号建议按证据分工。",
+                }
+            if False:
+                yield None
+
+        engine._ask = fake_ask
+        list(engine._run_wolf_pack_night("D1 夜晚"))
+        prompts = [
+            prompt for _, prompt, label, _ in captured
+            if "狼人讨论" in label
+        ]
+
+        self.assertTrue(prompts)
+        self.assertIn("至少两种解释", prompts[0])
+        self.assertIn("主悍跳/代跳", prompts[0])
+        self.assertIn("公开发言", prompts[0])
+        self.assertIn("没有相关事实时不要硬编", prompts[0])
+
     def test_good_audit_assignments_are_stable_and_diverse(self):
         engine = self.make_engine()
         first = [engine._good_audit_brief(s) for s in range(1, 5)]
