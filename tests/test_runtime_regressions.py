@@ -373,6 +373,9 @@ class EngineRegressionTests(unittest.TestCase):
         self.assertIn(
             "8号曾公开给后来机械确认狼人3号发金水/好人查验声明", facts
         )
+        self.assertIn("金水/查验关系链", facts)
+        self.assertIn("4号→9号（声明查验好人）", facts)
+        self.assertIn("8号→3号（声明查验好人）", facts)
         self.assertIn("反向金水关系审计", facts)
         self.assertIn("至少比较两种解释", facts)
         # A relation is an audit lead, never a substitute for a hidden role fact.
