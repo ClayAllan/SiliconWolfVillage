@@ -2,6 +2,7 @@
 """硅基狼村观战工作台。运行：python -m streamlit run app.py
 后台服务推进对局；圆桌、动态与玩家观察室只读取快照。"""
 
+import io
 import json
 import os
 import time
@@ -16,7 +17,7 @@ from service.view_projection import project_view, faction_counts, project_api_he
 from agent.model_protocol import ERROR_LABELS
 from storage.session_storage import storage_paths
 from storage.save_package import store_uploaded_save, MAX_SAVE_PACKAGE_BYTES
-from storage.archive_zip import private_archive_zip_stream, recent_archive_directories
+from storage.archive_zip import build_private_archive_zip, recent_archive_directories
 from agent.ai_agent import AgentManager
 from storage.game_archive import game_statistics
 from engine.game_engine import GameEngine
@@ -601,8 +602,8 @@ with st.sidebar:
                 )
                 st.download_button(
                     "⬇️ 生成并下载历史对局归档 ZIP",
-                    data=lambda root=REPLAY_DIR, archive=_selected_history: private_archive_zip_stream(
-                        root, archive
+                    data=lambda root=REPLAY_DIR, archive=_selected_history: io.BytesIO(
+                        build_private_archive_zip(root, archive)
                     ),
                     file_name=f"siliconwolfvillage-history-{_selected_history.name}.zip",
                     mime="application/zip",
