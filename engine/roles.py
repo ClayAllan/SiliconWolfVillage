@@ -163,7 +163,9 @@ class Werewolf(BaseRole):
     def get_private_memory(self, engine):
         mates = [w for w in engine.wolves if w != self.seat]
         return (f"你是狼人。你的狼队友座位号是：{mates}（他们和你是一伙的）。"
-                f"狼队目标：隐藏身份、误导好人、逐个淘汰神职与平民。必要时可自爆(is_explode)打乱节奏或吞警徽。")
+                f"狼队目标：隐藏身份、误导好人、逐个淘汰神职与平民。必要时可自爆(is_explode)打乱节奏或吞警徽。"
+                "全局策略提醒：持续分析反向金水与警徽传递链；可按局势考虑悍跳/代跳、倒钩、传话、给队友做身份或压对手身份。"
+                "每项策略都要评估后续收益、暴露风险和好人可能的反盘，不要把金水、警徽或队友支持当作自动洗白。")
 
     # 自爆纪律(所有狼共用)：别被怀疑就炸、要算实际收益、别坑队友
     _EXPLODE_DISCIPLINE = (
