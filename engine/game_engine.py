@@ -565,6 +565,25 @@ class GameEngine:
             lines.append("- 公开查验声明（主语和宾语绝不可改写；声明者未必是真预言家）：" + "；".join(
                 f"{c['seat']}号声称查验{c['target']}号为{c['result']}" for c in check_claims
             ) + "。")
+            claim_pairs = []
+            for claim in check_claims:
+                try:
+                    issuer = int(claim.get("seat"))
+                    target = int(claim.get("target"))
+                except (TypeError, ValueError):
+                    continue
+                claim_pairs.append(
+                    f"{issuer}号→{target}号（声明查验{claim.get('result', '未知')}）"
+                )
+            if claim_pairs:
+                lines.append(
+                    "- 金水/查验关系链（全部是公开声明，不是身份认证）：" + "；".join(claim_pairs) + "。"
+                )
+                lines.append(
+                    "- 对每条‘好人/金水’声明，先判断发言者是否真预言家，再比较至少两种解释："
+                    "狼给队友做身份、狼给好人金水以便利用/甩锅、或真预言家报出真实结果。"
+                    "核对接收者后续站边、投票、对跳与谁获益；不要把金水当硬身份，也不要要求每名玩家机械重复。"
+                )
             lines.append(
                 "- 反向金水分析：若发金水者可能是狼，接收者可能是队友被做身份，也可能是被利用或甩锅的好人；"
                 "被金水者反水也可能是独立判断或狼人切割。结合对跳、发言时间线、警徽流、票型和后续行为比较解释，"
