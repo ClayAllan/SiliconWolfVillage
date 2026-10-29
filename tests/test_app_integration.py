@@ -451,6 +451,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.app.session_state["viewer_mode"] = "单一视角"
         self.app.run()
         self.assert_clean()
+        self.assertNotIn(PRIVATE_ARCHIVE_ZIP_CACHE_KEY, self.app.session_state)
         self.assertFalse(any(
             item.label == label
             for item in self.app.get("download_button")
