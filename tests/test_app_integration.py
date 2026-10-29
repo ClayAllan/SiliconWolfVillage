@@ -1,5 +1,7 @@
 """真实 Streamlit 控件与后台服务的连接，不调用网络或付费模型。"""
+import io
 import json
+import zipfile
 import tempfile
 import threading
 import time
@@ -13,6 +15,7 @@ from agent.ai_agent import AgentManager
 from engine import config
 from engine.game_engine import GameEngine
 from service.game_service import GameService
+from storage.archive_zip import PRIVATE_ARCHIVE_ZIP_CACHE_KEY
 from test_runtime_regressions import MemoryOnlyManager
 
 
@@ -411,7 +414,7 @@ class AppIntegrationTests(unittest.TestCase):
             if item.label == label
         )
         self.assertTrue(download.disabled)
-        self.assertNotIn("prepared_archive_zip", self.app.session_state)
+        self.assertNotIn(PRIVATE_ARCHIVE_ZIP_CACHE_KEY, self.app.session_state)
 
         agreement = next(
             item for item in self.app.checkbox
@@ -424,9 +427,25 @@ class AppIntegrationTests(unittest.TestCase):
             if item.label == label
         )
         self.assertFalse(download.disabled)
-        # The archive is built lazily when the browser requests the download;
-        # AppTest must not eagerly build or retain a duplicate ZIP in session state.
-        self.assertNotIn("prepared_archive_zip", self.app.session_state)
+        # Consent prepares the ZIP once. The ordinary download widget must
+        # keep re-registering the same bytes across full-page auto-refresh reruns.
+        cached = self.app.session_state[PRIVATE_ARCHIVE_ZIP_CACHE_KEY]
+        self.assertIsInstance(cached["data"], bytes)
+        with zipfile.ZipFile(io.BytesIO(cached["data"])) as package:
+            self.assertIn("20261029_zip_fixture/manifest.json", package.namelist())
+            self.assertIn("20261029_zip_fixture/PRIVATE_ARCHIVE_NOTICE.txt", package.namelist())
+        cached_bytes = cached["data"]
+        self.app.run()
+        self.assert_clean()
+        self.assertEqual(
+            self.app.session_state[PRIVATE_ARCHIVE_ZIP_CACHE_KEY]["data"],
+            cached_bytes,
+        )
+        download = next(
+            item for item in self.app.get("download_button")
+            if item.label == label
+        )
+        self.assertFalse(download.disabled)
 
         # An unfinished restricted human perspective may not access the full ZIP.
         self.app.session_state["viewer_mode"] = "单一视角"
