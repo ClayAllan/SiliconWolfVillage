@@ -1,4 +1,4 @@
-"""Diagnostic fixture for Streamlit ZIP download delivery variants."""
+"""Minimal browser fixture for Streamlit's regular ZIP download path."""
 import io
 import zipfile
 
@@ -23,32 +23,10 @@ ZIP_PAYLOAD = make_payload()
 st.title("Private archive ZIP browser smoke")
 st.caption(f"Prepared cached ZIP bytes: {len(ZIP_PAYLOAD)}")
 st.download_button(
-    "Download ZIP bytes ignore",
+    "Download ZIP fixture",
     data=ZIP_PAYLOAD,
-    file_name="bytes-ignore.zip",
+    file_name="private-archive-smoke.zip",
     mime="application/zip",
     on_click="ignore",
-    key="zip_bytes_ignore",
-)
-st.download_button(
-    "Download ZIP callable ignore",
-    data=lambda payload=ZIP_PAYLOAD: payload,
-    file_name="callable-ignore.zip",
-    mime="application/zip",
-    on_click="ignore",
-    key="zip_callable_ignore",
-)
-st.download_button(
-    "Download ZIP bytes rerun",
-    data=ZIP_PAYLOAD,
-    file_name="bytes-rerun.zip",
-    mime="application/zip",
-    key="zip_bytes_rerun",
-)
-st.download_button(
-    "Download ZIP callable rerun",
-    data=lambda payload=ZIP_PAYLOAD: payload,
-    file_name="callable-rerun.zip",
-    mime="application/zip",
-    key="zip_callable_rerun",
+    key="zip_fixture",
 )
