@@ -17,7 +17,11 @@ from service.view_projection import project_view, faction_counts, project_api_he
 from agent.model_protocol import ERROR_LABELS
 from storage.session_storage import storage_paths
 from storage.save_package import store_uploaded_save, MAX_SAVE_PACKAGE_BYTES
-from storage.archive_zip import build_private_archive_zip, recent_archive_directories
+from storage.archive_zip import (
+    clear_cached_private_archive_zip,
+    get_or_build_cached_private_archive_zip,
+    recent_archive_directories,
+)
 from agent.ai_agent import AgentManager
 from storage.game_archive import game_statistics
 from engine.game_engine import GameEngine
@@ -26,13 +30,6 @@ from ui.ui_runtime import AUTO_POLL_SECONDS
 from service.live_feed import schedule_page_refresh
 from ui.feed_ui import render_feed
 
-
-def _make_archive_zip_download(root, archive):
-    """Create a zero-argument deferred callback for Streamlit's download API."""
-    def _generate_archive_zip():
-        return io.BytesIO(build_private_archive_zip(root, archive))
-
-    return _generate_archive_zip
 
 # 手动进度存档与自动终局档案分开保存。
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -608,21 +605,37 @@ with st.sidebar:
                     "我了解这是一份包含私密信息的完整归档",
                     key="archive_zip_private_acknowledged",
                 )
+                _zip_data = b""
+                _zip_error = None
+                if not _zip_agree:
+                    clear_cached_private_archive_zip(st.session_state)
+                elif not auto_running:
+                    try:
+                        with st.spinner("正在准备私密历史对局 ZIP…"):
+                            _zip_data = get_or_build_cached_private_archive_zip(
+                                st.session_state, REPLAY_DIR, _selected_history
+                            )
+                    except Exception as error:
+                        _zip_error = str(error)
+                        st.error(f"历史对局 ZIP 准备失败：{_zip_error}")
+
                 st.download_button(
-                    "⬇️ 生成并下载历史对局归档 ZIP",
-                    data=_make_archive_zip_download(REPLAY_DIR, _selected_history),
+                    "⬇️ 下载已准备的历史对局归档 ZIP",
+                    data=_zip_data,
                     file_name=f"siliconwolfvillage-history-{_selected_history.name}.zip",
                     mime="application/zip",
                     on_click="ignore",
-                    disabled=auto_running or not _zip_agree,
+                    disabled=auto_running or not _zip_agree or bool(_zip_error),
                     key="download_archive_zip",
                     use_container_width=True,
-                    help="点击后按需生成 ZIP；若打包失败，下载控件会显示具体错误。",
+                    help="勾选隐私确认后先准备一次 ZIP；下载文件会随页面自动刷新保持有效。",
                 )
-                st.caption(
-                    "点击一次即可生成并下载。ZIP 不会预先保存在页面会话状态中，"
-                    "也不会在定时刷新时反复压缩。"
-                )
+                if not _zip_agree:
+                    st.caption("勾选隐私确认后，系统会准备 ZIP；完成后点击下载。")
+                elif auto_running:
+                    st.caption("自动推演期间暂停准备 ZIP；请先暂停对局。")
+                elif not _zip_error:
+                    st.caption("ZIP 已在当前会话中准备并缓存；页面自动刷新不会重复压缩。")
         elif engine is not None:
             st.caption("真人对局尚未结束，暂不可导出包含全部私密记录的 ZIP。")
 
