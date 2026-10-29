@@ -33,3 +33,24 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Verify wheel build
         run: python -m build --wheel
+
+  browser-download:
+    name: Browser ZIP download
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Streamlit and Playwright
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "streamlit>=1.57,<1.58" playwright
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Verify repeated ZIP downloads in a real browser
+        run: python tests/run_download_button_browser_test.py
