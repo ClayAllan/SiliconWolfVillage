@@ -32,6 +32,8 @@ from ui.feed_ui import render_feed
 
 
 # 手动进度存档与自动终局档案分开保存。
+# 该标记用于区分线上实际运行的构建与尚未部署的 main/PR 代码。
+APP_BUILD_MARKER = "SWV-20261030-RELATIONSHIP-ZIP-CACHE"
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -636,7 +638,10 @@ with st.sidebar:
                 elif auto_running:
                     st.caption("自动推演期间暂停准备 ZIP；请先暂停对局。")
                 elif not _zip_error:
-                    st.caption("ZIP 已在当前会话中准备并缓存；页面自动刷新不会重复压缩。")
+                    st.caption(
+                        f"ZIP 已在当前会话中准备并缓存（{len(_zip_data):,} bytes）；页面自动刷新不会重复压缩。"
+                    )
+                    st.caption(f"部署验收标记：{APP_BUILD_MARKER}")
         else:
             # Do not retain a full private archive while a restricted human
             # perspective is active and the game has not ended.
