@@ -199,7 +199,24 @@ class AsyncAgentTests(unittest.TestCase):
         self.assertNotIn("守墓人每夜", system)
         self.assertNotIn("骑士白天", system)
         self.assertNotIn("狼美人夜间", system)
+        self.assertIn("反向金水", system)
+        self.assertIn("警徽关系链", system)
+        self.assertIn("代跳", system)
+        self.assertIn("传话", system)
         manager._request_pool.shutdown(wait=True, cancel_futures=True)
+
+    def test_wolf_playbook_includes_explicit_social_tactics(self):
+        engine = GameEngine(MemoryOnlyManager())
+        engine.setup()
+        wolf = engine.roles[engine.wolves[0]]
+        private_memory = wolf.get_private_memory(engine)
+        self.assertIn("反向金水", private_memory)
+        self.assertIn("传话", private_memory)
+        prompt = wolf.get_playbook_prompt(engine)
+        self.assertIn("反向金水", prompt)
+        self.assertIn("警徽链", prompt)
+        self.assertIn("代跳", prompt)
+        self.assertIn("传话", prompt)
 
     def test_token_usage_accumulates_and_survives_save_load(self):
         manager = self.make_manager()
@@ -316,6 +333,8 @@ class EngineRegressionTests(unittest.TestCase):
 
         self.assertIn("8号声称自己是预言家", facts)
         self.assertIn("8号声称查验3号为好人", facts)
+        self.assertIn("反向金水分析", facts)
+        self.assertIn("被利用或甩锅的好人", facts)
         self.assertNotIn("7号为好人", facts)
 
     def test_badge_chain_with_confirmed_wolf_triggers_relationship_audit(self):
@@ -331,6 +350,8 @@ class EngineRegressionTests(unittest.TestCase):
         self.assertIn("关系审计警报", facts)
         self.assertIn("3号曾把警徽交给后来机械确认的狼人4号", facts)
         self.assertIn("机械确认的狼人4号曾把警徽交给9号", facts)
+        self.assertIn("警徽关系链推理", facts)
+        self.assertIn("故意甩锅", facts)
         self.assertIn("自爆只机械确认自爆者本人", facts)
 
     def test_consolidation_is_broadcast_as_non_binding_advice(self):
