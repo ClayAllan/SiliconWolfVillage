@@ -138,3 +138,11 @@ def build_private_archive_zip(replay_root, archive_directory) -> bytes:
     if len(data) > MAX_ARCHIVE_ZIP_BYTES:
         raise ValueError("压缩后的档案超过 64 MiB 内存下载上限")
     return data
+
+def private_archive_zip_stream(replay_root, archive_directory) -> io.BytesIO:
+    """Return a seekable stream for Streamlit's deferred-download API.
+
+    The stream is created only when the user clicks Download, not during every
+    page rerun. This also lets Streamlit surface packaging errors in the widget.
+    """
+    return io.BytesIO(build_private_archive_zip(replay_root, archive_directory))
