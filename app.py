@@ -590,6 +590,7 @@ with st.sidebar:
             _history_archives = recent_archive_directories(REPLAY_DIR)
             st.markdown("**📦 历史对局归档 ZIP（仅供私人保存）**")
             if not _history_archives:
+                clear_cached_private_archive_zip(st.session_state)
                 st.caption("当前浏览器会话尚无可导出的历史归档。完整对局结束后会自动生成；也可选择以前已归档的对局。")
             else:
                 _selected_history = st.selectbox(
@@ -636,8 +637,12 @@ with st.sidebar:
                     st.caption("自动推演期间暂停准备 ZIP；请先暂停对局。")
                 elif not _zip_error:
                     st.caption("ZIP 已在当前会话中准备并缓存；页面自动刷新不会重复压缩。")
-        elif engine is not None:
-            st.caption("真人对局尚未结束，暂不可导出包含全部私密记录的 ZIP。")
+        else:
+            # Do not retain a full private archive while a restricted human
+            # perspective is active and the game has not ended.
+            clear_cached_private_archive_zip(st.session_state)
+            if engine is not None:
+                st.caption("真人对局尚未结束，暂不可导出包含全部私密记录的 ZIP。")
 
     # ===== 💾 存档 / 读档（V6.0）=====
     with st.expander("💾 存档 / 读档"):
