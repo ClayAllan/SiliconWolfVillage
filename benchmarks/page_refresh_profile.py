@@ -5,7 +5,7 @@ Run:
     python benchmarks/page_refresh_profile.py --output-dir benchmark-results
 
 The harness uses the real GameService, the exact app.py human-action guard,
-project_view(), and select_feed_window(). It models the three snapshots on the
+project_view(), and select_feed_window(). It models the two snapshots on the
 normal active-game rerun path, but deliberately excludes Streamlit rendering,
 browser transport, and paid model requests.
 """
