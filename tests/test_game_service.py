@@ -123,6 +123,33 @@ class GameServiceTests(unittest.TestCase):
         self.assertFalse(paused["worker_expected"])
         self.assertEqual(paused["wait_kind"], "paused")
 
+    def test_runtime_snapshot_skips_engine_deepcopy_and_checks_human_integrity(self):
+        engine, service = self.make_service()
+
+        class CopyBomb:
+            def __deepcopy__(self, memo):
+                raise AssertionError("runtime snapshot must not deepcopy engine fields")
+
+        engine.runtime_snapshot_copy_bomb = CopyBomb()
+        engine.human_seat = 1
+        runtime = service.runtime_snapshot()
+        self.assertFalse(hasattr(runtime, "engine"))
+        self.assertEqual(runtime.react_budget, engine.react_budget)
+        self.assertEqual(runtime.active_request_id, engine._active_request_id)
+        self.assertEqual(runtime.pending_human_action, engine.pending_human_action)
+        self.assertEqual(runtime.replay_logs, engine.replay_logs)
+        self.assertEqual(runtime.human_action_integrity_error, "")
+        self.assertEqual(runtime.manager.get_usage_snapshot(), engine.manager.get_usage_snapshot())
+        self.assertEqual(runtime.manager.has_pending(), engine.manager.has_pending())
+
+        engine.reasoning_log[1].append({
+            "label": "未由真人提交的行动",
+            "actor_source": "ai",
+            "response": {"decision_source": "model"},
+        })
+        unsafe = service.runtime_snapshot()
+        self.assertIn("安全保护", unsafe.human_action_integrity_error)
+
     def test_pause_is_stable_and_resume_advances(self):
         engine, service = self.make_service()
         service.play()
