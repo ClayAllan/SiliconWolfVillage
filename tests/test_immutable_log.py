@@ -48,6 +48,18 @@ class ImmutableLogTests(unittest.TestCase):
         self.assertIs(copy.copy(frozen), frozen)
         self.assertEqual(json.loads(json.dumps(frozen))["totals"]["1"], 2.5)
 
+    def test_container_constructors_also_freeze_nested_values(self):
+        manual_dict = FrozenDict({"nested": {"labels": ["safe"]}})
+        manual_list = FrozenList([{"nested": ["safe"]}])
+        self.assertIsInstance(manual_dict["nested"], FrozenDict)
+        self.assertIsInstance(manual_dict["nested"]["labels"], FrozenList)
+        self.assertIsInstance(manual_list[0], FrozenDict)
+        self.assertIsInstance(manual_list[0]["nested"], FrozenList)
+        with self.assertRaises(TypeError):
+            manual_dict["nested"]["labels"].append("changed")
+        with self.assertRaises(TypeError):
+            manual_list[0]["nested"][0] = "changed"
+
     def test_unsupported_or_cyclic_values_fall_back_without_sharing_them(self):
         unsupported = {"payload": object()}
         self.assertIs(freeze_log_row(unsupported), unsupported)
