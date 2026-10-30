@@ -9,8 +9,15 @@ on:
       - perf/page-refresh-diagnostics
       - perf/reduce-active-refresh-snapshots
       - perf/snapshot-field-cost-profile
+      - perf/immutable-log-snapshot-production
     paths:
       - benchmarks/snapshot_baseline.py
+      - storage/immutable_log.py
+      - engine/game_engine.py
+      - tests/test_immutable_log.py
+      - tests/test_game_service.py
+      - tests/test_snapshot_baseline_fixture.py
+      - tests/test_page_refresh_profile.py
       - benchmarks/page_refresh_profile.py
       - benchmarks/__init__.py
       - app.py

@@ -22,10 +22,14 @@ class PageRefreshProfileTests(unittest.TestCase):
         guard = load_integrity_guard()
         self.assertEqual(guard(engine), "")
 
-        row = engine.reasoning_log[human_seat][0]
+        rows = engine.reasoning_log[human_seat]
+        row = dict(rows[0])
+        response = dict(row.get("response") or {})
         row["actor_source"] = "ai"
-        row["response"].pop("_human_action", None)
-        row["response"]["decision_source"] = "model"
+        response.pop("_human_action", None)
+        response["decision_source"] = "model"
+        row["response"] = response
+        rows[0] = row
         self.assertIn("安全保护", guard(engine))
 
     def test_snapshot_probe_attributes_deepcopy_time_to_engine_fields(self):

@@ -177,13 +177,34 @@ class GameServiceTests(unittest.TestCase):
 
     def test_snapshot_does_not_share_mutable_game_state_or_client(self):
         engine, service = self.make_service()
+        public_index = len(engine.public_log)
+        reasoning_index = len(engine.reasoning_log[1])
+        engine._append_public_item({
+            "kind": "votechart", "totals": {1: 2.0}, "notes": [{"targets": [2, 3]}],
+        })
+        engine._record_reasoning(
+            1, "D1 发言", "reasoning", "speech",
+            response={"decision_source": "model", "meta": {"targets": [2, 3]}},
+        )
         view = service.snapshot().engine
         view.players[1]["alive"] = False
         view.public_log.append({"kind": "judge", "text": "污染"})
         view.roles[1].seat = 99
+
+        # Outer containers are independent; recursively frozen rows are shared safely.
+        self.assertIsNot(view.public_log, engine.public_log)
+        self.assertIsNot(view.reasoning_log, engine.reasoning_log)
+        self.assertIsNot(view.reasoning_log[1], engine.reasoning_log[1])
+        self.assertIs(view.public_log[public_index], engine.public_log[public_index])
+        self.assertIs(view.reasoning_log[1][reasoning_index], engine.reasoning_log[1][reasoning_index])
+        with self.assertRaises(TypeError):
+            view.public_log[public_index]["notes"][0]["targets"].append(4)
+        with self.assertRaises(TypeError):
+            view.reasoning_log[1][reasoning_index]["response"]["meta"]["targets"][0] = 99
+
         self.assertTrue(engine.players[1]["alive"])
         self.assertNotEqual(engine.roles[1].seat, 99)
-        self.assertNotIn("污染", str(engine.public_log))
+        self.assertEqual(len(engine.public_log), public_index + 1)
         self.assertFalse(hasattr(view.manager, "client"))
         self.assertFalse(hasattr(view.manager, "inject"))
         self.assertIsNone(view.recorder)

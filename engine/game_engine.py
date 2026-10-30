@@ -26,6 +26,7 @@ from datetime import datetime
 
 from engine import config
 from storage.replay_recorder import GameRecorder
+from storage.immutable_log import freeze_log_row
 # ★V6.3 角色多态：解析工具与角色类下沉到 roles.py（roles 不反向 import 本模块 → 无循环依赖）
 from engine.roles import create_role, parse_seat, validate_board_roles
 
@@ -382,7 +383,9 @@ class GameEngine:
         # 同局递增序号用于跨局隔离、滚动游标和归档定位。
         self._public_event_seq = getattr(self, "_public_event_seq", len(self.public_log)) + 1
         item.update(game_id=self.game_id, event_seq=self._public_event_seq)
-        self.public_log.append(item)
+        # Freeze the row once at its append boundary. Snapshots may safely share
+        # this immutable payload while copying only the outer list container.
+        self.public_log.append(freeze_log_row(item))
 
     def _log_judge(self, text):
         item = {"kind": "judge", "text": text, "phase": self.phase}
@@ -433,7 +436,9 @@ class GameEngine:
             item["response"] = response
         if request_id:
             item["request_id"] = request_id
-        self.reasoning_log[seat].append(item)
+        # Reasoning rows include private nested response data; freeze recursively
+        # so no snapshot can mutate data still owned by the live engine.
+        self.reasoning_log[seat].append(freeze_log_row(item))
         self._record_event(
             "agent_action",
             seat=seat,
@@ -755,8 +760,11 @@ class GameEngine:
                 sequence = self._public_event_seq + 1
             row["event_seq"] = sequence
             self._public_event_seq = sequence
-            self.public_log[index] = row
-        self.reasoning_log = {int(s): list(v or []) for s, v in (data.get("reasoning_log") or {}).items()}
+            self.public_log[index] = freeze_log_row(row)
+        self.reasoning_log = {
+            int(s): [freeze_log_row(row) for row in (v or [])]
+            for s, v in (data.get("reasoning_log") or {}).items()
+        }
         for i in range(1, 13):
             self.reasoning_log.setdefault(i, [])
         self.current_speaker = None
