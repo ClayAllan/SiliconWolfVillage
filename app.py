@@ -512,7 +512,9 @@ with st.sidebar:
 
     if ss.game_service is not None:
         ss.game_service.configure(automatic=auto, delay=delay, turbo=is_turbo, react_budget=react_budget)
-        engine = sync_game_state()
+        # The initial snapshot remains sufficient for sidebar reads: configure()
+        # changes scheduling options, not the copied UI data. The main view takes
+        # a fresh snapshot below, after sidebar actions have run.
     auto_running = bool(auto and ss.running and not ss.done)
     model_settings = dict(api_key=api_key, base_url=base_url, good_model=good_model,
                           wolf_model=wolf_model, temperature=temperature, agent_timeout=agent_timeout,
