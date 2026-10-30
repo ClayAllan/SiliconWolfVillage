@@ -414,7 +414,7 @@ def render_markdown(payload):
         f"- Git SHA: {metadata['git_sha']}",
         "- Synthetic workload; offline manager and pulse generator; no paid model requests.",
         f"- Normal active-game rerun models {NORMAL_ACTIVE_REFRESH_SNAPSHOT_CALLS} snapshots, "
-        "the app's exact integrity guard three times, configure, one projection, and one bounded feed selection.",
+        f"the app's exact integrity guard {NORMAL_ACTIVE_REFRESH_SNAPSHOT_CALLS} times, configure, one projection, and one bounded feed selection.",
         f"- All app.py sync_game_state call sites: {metadata['all_sync_game_state_call_sites']}",
         f"- Module-level rerun call sites: {metadata['top_level_sync_game_state_call_sites']}",
         "",
