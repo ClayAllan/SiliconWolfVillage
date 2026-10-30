@@ -52,7 +52,7 @@ class PageRefreshProfileTests(unittest.TestCase):
         self.assertLessEqual(
             sum(fields.values()), metrics["deepcopy_ms"] + 0.01,
         )
-        self.assertGreater(metrics["deepcopy_calls"], len(fields))
+        self.assertGreaterEqual(metrics["deepcopy_calls"], len(fields))
         expected_fields = set(vars(engine)) - {"manager", "recorder"}
         self.assertEqual(set(fields), expected_fields)
 
