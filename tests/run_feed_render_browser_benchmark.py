@@ -93,6 +93,7 @@ def run_case(browser, event_count: int, mode: str, repeat: int) -> dict:
             raise AssertionError(f"Fixture returned HTTP {response.status}")
 
         page.locator(READY_SELECTOR).wait_for(state="visible", timeout=90_000)
+        page.locator(METRICS_SELECTOR).wait_for(state="visible", timeout=90_000)
         page.wait_for_function(
             """expected => {
                 const root = document.querySelector('[class*="st-key-live_feed_"]');
@@ -136,6 +137,10 @@ def run_case(browser, event_count: int, mode: str, repeat: int) -> dict:
                 f"Chromium rendered {browser_metrics.get('rendered_events')} events; "
                 f"expected {expected_rows}; details={browser_metrics}"
             )
+        if websocket["connections"] < 1 or websocket["received_frames"] < 1:
+            raise AssertionError(
+                f"Streamlit WebSocket instrumentation saw no received frames: {websocket}"
+            )
 
         return {
             "events_in_history": event_count,
@@ -143,6 +148,7 @@ def run_case(browser, event_count: int, mode: str, repeat: int) -> dict:
             "repeat": repeat,
             "browser_ready_ms": round(browser_ready_ms, 3),
             "fixture_build_ms": metrics["fixture_build_ms"],
+            "fixture_access_ms": metrics["fixture_access_ms"],
             "python_render_ms": metrics["python_render_ms"],
             "python_rendered_rows": metrics["rendered_rows"],
             "python_html_bytes": metrics["rendered_html_bytes"],
@@ -171,6 +177,7 @@ def summarize(samples: list[dict]) -> list[dict]:
     for (events, mode), group in sorted(grouped.items()):
         keys = (
             "fixture_build_ms",
+            "fixture_access_ms",
             "python_render_ms",
             "browser_ready_ms",
             "python_html_bytes",
@@ -203,13 +210,15 @@ def render_markdown(payload: dict) -> str:
         f"- Repeats per scenario: {payload['metadata']['repeats']}",
         "- Synthetic, recursively immutable public-log rows; no model API or paid requests.",
         "- Uses the production feed component and event HTML renderer inside a minimal Streamlit host.",
+        "- All event-count fixtures are pre-warmed before measured samples; fixture construction time is reported separately.",
         "",
-        "| History rows | Mode | Python render P50 (ms) | Browser ready P50 (ms) | Python HTML (KiB) | Feed DOM (KiB) | DOM nodes | WS received (KiB) |",
-        "|---:|---|---:|---:|---:|---:|---:|---:|",
+        "| History rows | Mode | Fixture build (ms) | Python render (ms) | Browser ready (ms) | Python HTML (KiB) | Feed DOM (KiB) | DOM nodes | WS received (KiB) |",
+        "|---:|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in payload["summary"]:
         lines.append(
             f"| {row['events_in_history']:,} | {row['mode']} "
+            f"| {row['fixture_build_ms_median']:.2f} "
             f"| {row['python_render_ms_median']:.2f} "
             f"| {row['browser_ready_ms_median']:.2f} "
             f"| {row['python_html_bytes_median'] / 1024:.1f} "
@@ -222,7 +231,8 @@ def render_markdown(payload: dict) -> str:
         "## Interpretation boundaries",
         "",
         "- Python render time measures the fixture's render_feed call, including production event HTML generation and Streamlit element construction; it excludes later browser work.",
-        "- Browser ready time measures navigation start until the expected event DOM is present and two animation frames have elapsed. It includes local Streamlit session work, WebSocket delivery, browser parsing and rendering.",
+        "- Browser ready time measures navigation start until the expected event DOM is present and two animation frames have elapsed, followed by a 200 ms settle interval. Event-count fixtures are cached and warmed before measurements, so the timed samples do not rebuild the synthetic history.",
+        "- Fixture build time is measured during cache population and reported separately; fixture access time is also retained in the JSON samples.",
         "- WebSocket byte counts include all frames observed for that fixture session, not only the feed delta. They are a session-level transport indicator, not an exact serialized feed payload size.",
         "- DOM counts and HTML bytes are scoped to the keyed feed container, not the entire application.",
         "- The fixture excludes the rest of app.py, model inference, external API latency, production network RTT, multi-viewer contention and long-lived memory retention.",
@@ -276,8 +286,9 @@ def main():
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
             try:
-                # Warm Streamlit's first-session path; discard this sample.
-                run_case(browser, min(sizes[0], 100), "bounded", 0)
+                # Warm Streamlit and populate the shared immutable fixture cache for every size.
+                for size in sizes:
+                    run_case(browser, size, "bounded", 0)
                 samples = []
                 for mode in ("bounded", "full"):
                     for size in sizes:
@@ -321,7 +332,11 @@ def main():
     except Exception:
         if process.poll() is None:
             process.terminate()
-            process.wait(timeout=5)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
         server_log.seek(0)
         print("Streamlit fixture server output (tail):\n" + server_log.read()[-8000:], file=sys.stderr)
         raise
