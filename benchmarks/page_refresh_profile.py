@@ -72,10 +72,17 @@ class _TimedCondition:
 class _TimedCopyModule:
     """Module-local proxy so only GameService.snapshot deepcopy calls are timed."""
 
-    def __init__(self, original, local):
+    def __init__(self, original, local, *, profile_fields=False):
         self._original = original
         self._local = local
+        self._profile_fields = profile_fields
+        self._field_names_by_id = {}
         self.copy = original.copy
+
+    def set_field_names(self, field_names_by_id):
+        self._field_names_by_id = {
+            object_id: list(names) for object_id, names in field_names_by_id.items()
+        }
 
     def deepcopy(self, value, memo=None):
         if not getattr(self._local, "active", False):
@@ -89,9 +96,17 @@ class _TimedCopyModule:
                 return self._original.deepcopy(value)
             return self._original.deepcopy(value, memo)
         finally:
+            elapsed = time.perf_counter_ns() - started
             current = self._local.current
-            current["deepcopy_ns"] += time.perf_counter_ns() - started
+            current["deepcopy_ns"] += elapsed
             current["deepcopy_calls"] += 1
+            if self._profile_fields:
+                names = self._field_names_by_id.get(id(value))
+                if names:
+                    field_name = names.pop(0)
+                    current["deepcopy_fields_ns"][field_name] = (
+                        current["deepcopy_fields_ns"].get(field_name, 0) + elapsed
+                    )
 
     def __getattr__(self, name):
         return getattr(self._original, name)
@@ -100,22 +115,35 @@ class _TimedCopyModule:
 class SnapshotProbe:
     """Instrument a service instance without changing production source code."""
 
-    def __init__(self, service):
+    def __init__(self, service, *, profile_fields=False):
         self.service = service
+        self.profile_fields = profile_fields
         self._local = threading.local()
         self._original_condition = service._condition
         self._original_copy_module = service_module.copy
+        self._timed_copy_module = _TimedCopyModule(
+            self._original_copy_module, self._local, profile_fields=profile_fields
+        )
         service._condition = _TimedCondition(self._original_condition, self._local)
-        service_module.copy = _TimedCopyModule(self._original_copy_module, self._local)
+        service_module.copy = self._timed_copy_module
         self._closed = False
 
     def take(self):
+        field_names_by_id = {}
+        if self.profile_fields:
+            for field_name, value in vars(self.service._engine).items():
+                if field_name in {"manager", "recorder"}:
+                    continue
+                field_names_by_id.setdefault(id(value), []).append(field_name)
+            self._timed_copy_module.set_field_names(field_names_by_id)
+
         sample = {
             "total_ns": 0,
             "lock_wait_ns": 0,
             "lock_hold_ns": 0,
             "deepcopy_ns": 0,
             "deepcopy_calls": 0,
+            "deepcopy_fields_ns": {},
         }
         self._local.current = sample
         self._local.active = True
@@ -126,12 +154,20 @@ class SnapshotProbe:
             sample["total_ns"] = time.perf_counter_ns() - started
             self._local.active = False
             self._local.current = None
+        field_total_ns = sum(sample["deepcopy_fields_ns"].values())
         return snapshot, {
             "total_ms": sample["total_ns"] / 1_000_000,
             "lock_wait_ms": sample["lock_wait_ns"] / 1_000_000,
             "lock_hold_ms": sample["lock_hold_ns"] / 1_000_000,
             "deepcopy_ms": sample["deepcopy_ns"] / 1_000_000,
             "deepcopy_calls": sample["deepcopy_calls"],
+            "deepcopy_fields_ms": {
+                name: elapsed / 1_000_000
+                for name, elapsed in sample["deepcopy_fields_ns"].items()
+            },
+            "deepcopy_unattributed_ms": max(
+                0, sample["deepcopy_ns"] - field_total_ns
+            ) / 1_000_000,
         }
 
     def close(self):
@@ -287,6 +323,70 @@ def profile_page_refresh(service, probe, human_seat, integrity_guard, *, snapsho
 
 def _stats(values):
     return baseline.stats([float(value) for value in values])
+
+
+def _field_item_count(name, value):
+    if name == "reasoning_log" and isinstance(value, dict):
+        return sum(len(rows or []) for rows in value.values())
+    if isinstance(value, (dict, list, tuple, set, str, bytes)):
+        return len(value)
+    return None
+
+
+def profile_snapshot_fields(public_rows, repeats):
+    """Measure per-attribute deepcopy cost inside the real GameService.snapshot call."""
+    engine, _human_seat = baseline.fixture(public_rows)
+    field_metadata = {}
+    for name, value in vars(engine).items():
+        if name in {"manager", "recorder"}:
+            continue
+        field_metadata[name] = {
+            "type": type(value).__name__,
+            "items": _field_item_count(name, value),
+        }
+
+    with tempfile.TemporaryDirectory(prefix="swv-snapshot-field-profile-") as directory:
+        service = GameService(engine, directory, automatic=False)
+        probe = SnapshotProbe(service, profile_fields=True)
+        try:
+            for _ in range(2):
+                snapshot, _ = probe.take()
+                del snapshot
+
+            samples = []
+            for _ in range(repeats):
+                snapshot, metrics = probe.take()
+                del snapshot
+                samples.append(metrics)
+
+            field_values = {}
+            for sample in samples:
+                for name, elapsed in sample["deepcopy_fields_ms"].items():
+                    field_values.setdefault(name, []).append(elapsed)
+            fields = {
+                name: {
+                    **field_metadata[name],
+                    **_stats(values),
+                }
+                for name, values in field_values.items()
+            }
+            total_field_median = sum(
+                item["median_ms"] for item in fields.values()
+            )
+            return {
+                "public_rows": public_rows,
+                "snapshot_total": _stats([sample["total_ms"] for sample in samples]),
+                "snapshot_deepcopy": _stats([sample["deepcopy_ms"] for sample in samples]),
+                "unattributed_deepcopy": _stats([
+                    sample["deepcopy_unattributed_ms"] for sample in samples
+                ]),
+                "field_median_sum_ms": round(total_field_median, 3),
+                "fields": fields,
+            }
+        finally:
+            probe.close()
+            with patch("service.game_service.archive_game", return_value=None):
+                service.close()
 
 
 def profile_case(public_rows, repeats, integrity_guard):
@@ -487,6 +587,43 @@ def render_markdown(payload):
             f"| {case['projection']['median_ms']:.2f} "
             f"| {case['feed_selection']['median_ms']:.3f} |"
         )
+    field_profiles = payload.get("snapshot_field_profiles", [])
+    if field_profiles:
+        lines.extend([
+            "",
+            "## Engine-field deepcopy cost inside GameService.snapshot",
+            "",
+            "Per-field timings are attributed to the top-level engine attribute passed to deepcopy by GameService.snapshot. The table shows the eight largest fields at each workload size.",
+            "",
+        ])
+        for field_profile in field_profiles:
+            total_copy = field_profile["snapshot_deepcopy"]["median_ms"]
+            lines.extend([
+                f"### {field_profile['public_rows']:,} public events",
+                "",
+                "| Engine field | Type | Items / rows | Deepcopy P50 / P95 (ms) | P50 / total deepcopy P50 |",
+                "|---|---|---:|---:|---:|",
+            ])
+            ranked = sorted(
+                field_profile["fields"].items(),
+                key=lambda item: item[1]["median_ms"],
+                reverse=True,
+            )[:8]
+            for name, stats in ranked:
+                share = 100.0 * stats["median_ms"] / total_copy if total_copy else 0.0
+                items = stats["items"] if stats["items"] is not None else "—"
+                lines.append(
+                    f"| {name} | {stats['type']} | {items} "
+                    f"| {stats['median_ms']:.2f} / {stats['p95_ms']:.2f} "
+                    f"| {share:.1f}% |"
+                )
+            lines.extend([
+                "",
+                f"- Snapshot deepcopy P50: {total_copy:.2f} ms; unattributed manager/runtime/other deepcopy P50: {field_profile['unattributed_deepcopy']['median_ms']:.2f} ms.",
+                f"- Sum of per-field medians: {field_profile['field_median_sum_ms']:.2f} ms. Per-field medians are independent statistics and are not expected to sum exactly to the total median.",
+                "",
+            ])
+
     contention = payload["page_refresh_contention"]
     lines.extend([
         "",
@@ -513,6 +650,8 @@ def render_markdown(payload):
         "- Snapshot lock wait measures only time waiting to enter GameService.snapshot's Condition.",
         "- Snapshot lock hold measures the Condition critical section, including engine deep copies and manager/runtime diagnostics.",
         "- Deepcopy time counts copy.deepcopy calls made by GameService.snapshot; it excludes project_view's separately imported deepcopy calls.",
+        "- Optional field profiling maps each top-level engine attribute by object identity before snapshot and attributes only the corresponding outer deepcopy call; nested recursive copies remain within that field's elapsed time.",
+        "- Unattributed deepcopy includes manager/runtime diagnostics and snapshot metadata not copied from a top-level engine field.",
         "- Integrity-guard timing runs the exact self-contained function extracted from app.py; synthetic human-seat records are marked as human actions.",
         "- The current two-snapshot path is compared in the same process with a legacy three-snapshot control; the paired delta is more useful than cross-run absolute timing.",
         "- The refresh harness reproduces the active-game state/data path, not Streamlit component rendering, websocket delivery, browser paint, or network latency.",
@@ -559,11 +698,24 @@ def main():
             "workload": "balanced 12-seat synthetic history; legitimate human actions on human seat",
         },
         "cases": [],
+        "snapshot_field_profiles": [],
     }
 
     for size in sizes:
         case = profile_case(size, args.repeats, integrity_guard)
         payload["cases"].append(case)
+        field_profile = profile_snapshot_fields(size, args.repeats)
+        payload["snapshot_field_profiles"].append(field_profile)
+        top_fields = sorted(
+            field_profile["fields"].items(),
+            key=lambda item: item[1]["median_ms"],
+            reverse=True,
+        )[:3]
+        print(
+            f"SNAPSHOT-FIELDS {size:6d} events: "
+            + "; ".join(f"{name}={stats['median_ms']:.3f}ms" for name, stats in top_fields),
+            flush=True,
+        )
         print(
             f"PAGE-REFRESH {size:6d} events: "
             f"total={case['page_refresh']['median_ms']:.3f}ms; "

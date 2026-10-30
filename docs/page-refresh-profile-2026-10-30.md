@@ -189,3 +189,59 @@ app.py 中 sync_game_state() 的全部调用点：
 - 配对页面刷新基准通过；原始 Artifact 已归档。
 - 构建标记更新为 `SWV-20261030-REFRESH-2SNAP-V1`；PR 合并后仍须由 main 分支部署 Smoke 在真实 Streamlit 页面中找到该标记，才能确认线上已部署。
 - 本节只证明 PR 分支的代码与离线测试/基准结果；是否已进入 main、是否已在线上生效，必须分别以 PR 合并状态和 main 分支部署 Smoke 为准。
+
+
+## 9. P2-C：Snapshot 深拷贝字段成本与日志快照设计依据（PR #33）
+
+### 测量方法
+
+- PR：[按引擎字段分析 Snapshot deepcopy 成本](https://github.com/ClayAllan/SiliconWolfVillage/pull/33)。
+- [GitHub Actions 运行](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41009607844)；[原始 JSON / Markdown Artifact](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41009607844/artifacts/12956959707)。
+- 在真实 `GameService.snapshot()` 调用中，按 `GameEngine` 顶层属性的对象身份归因每次外层 `copy.deepcopy(field_value)` 耗时；递归复制包含在所属字段耗时内。
+- `manager` 和 `recorder` 不属于引擎字段复制，单独归入未归因的 manager/runtime/metadata deepcopy。
+- 每种规模先预热2次，再采样9次；规模为100 / 1,000 / 5,000 / 15,000条公开事件，推理记录分布覆盖12席。
+- 这是合成离线数据，不调用模型API。字段归因需要额外的计时和对象身份查表开销，适合识别主要热点，不应把微秒级数值视为生产环境精确成本。
+
+### 字段成本结果
+
+| 公开事件 | public_log P50 (ms) | reasoning_log P50 (ms) | 两者占 Snapshot deepcopy P50 | Snapshot deepcopy P50 (ms) |
+|---:|---:|---:|---:|---:|
+| 100 | 0.31 | 0.15 | 60.5% | 0.76 |
+| 1,000 | 3.03 | 1.35 | 93.8% | 4.67 |
+| 5,000 | 15.18 | 6.95 | 98.5% | 22.46 |
+| 15,000 | 47.01 | 21.83 | 99.0% | 69.53 |
+
+15,000条事件下的主要字段：
+
+| Engine field | 类型 | 行数 / 项数 | Deepcopy P50 / P95 (ms) | 占总 deepcopy P50 |
+|---|---|---:|---:|---:|
+| public_log | list | 15,000 | 47.01 / 53.22 | 67.6% |
+| reasoning_log | dict | 5,000 | 21.83 / 27.64 | 31.4% |
+| rng | Random | — | 0.16 / 0.17 | 0.2% |
+| roles | dict | 12 | 0.09 / 0.11 | 0.1% |
+| players | dict | 12 | 0.03 / 0.04 | 0.0% |
+
+其他顶层字段的复制成本更小；未归因 deepcopy P50 约0.01ms。单独优化玩家、角色或随机数状态不会明显改善大历史快照成本。
+
+### 源码审计：当前日志写入与投影方式
+
+1. `GameEngine._append_public_item()` 为新公开事件补充 `game_id` / `event_seq` 后追加到 `public_log`；`_record_reasoning()` 将新推理记录追加到对应席位的 `reasoning_log`。
+2. `load_state()` 会重新构建/替换日志容器，并对公开事件行做规范化。当前引擎正常对局路径中没有发现对既有日志行的常规原地更新；但行本身仍是普通可变 dict/list，append-only 目前是实现约定，不是类型系统强制的不变性保证。
+3. `GameService.snapshot()` 先完整深拷贝所有席位的 `reasoning_log`；之后 `project_view()` 才根据观众席位挑选可见推理记录并再次深拷贝。单一视角通常只需要本人（狼人还需要按规则可见的队友）推理记录，因此当前全量复制存在明显的可避免工作。
+4. 公开事件路径中，`project_events()` 会遍历完整 `public_log` 并为可见事件创建浅层 dict；`project_view()` 随后又对整批 `public_rows` 执行深拷贝。此时源数据已经是 `GameService.snapshot()` 的隔离副本，形成了多层复制。
+5. `ui.feed_ui.render_feed()` 最后才调用 `select_feed_window()`。默认只显示最近90条，但在消息窗口之前，完整公开日志已经经过快照复制和视角投影；只有用户开启完整历史时才真正需要全量输出。
+
+上述结论是对当前源码的静态审计，不等于已经建立日志不可变性契约。测试、预览工具和加载流程可能构造或替换日志行；在引入跨快照共享前仍需补充强约束和回归测试。
+
+### 对下一步架构的判断
+
+**主要优化对象已经明确：不是整个 GameEngine，而是 `public_log` 和 `reasoning_log` 两类日志的快照、投影和窗口处理。**
+
+建议后续按以下顺序推进：
+
+- **C1：建立日志不可变性边界。** 明确事件行写入后不得原地修改；评估冻结记录、不可变嵌套结构或 append-only chunk。不能只做浅拷贝并假设 dict 永远不变。
+- **C2：设计观众视角 UI DTO。** 在 GameService 锁内仅捕获必要的小字段、可见推理日志和安全的公开事件窗口数据；昂贵的格式化与 HTML 渲染留在锁外。全知视角、完整历史和存档导出继续保留完整路径。
+- **C3：合并公开事件投影与窗口选择。** 在隐私过滤之后完成频道过滤、未读计数和90条窗口选择，避免先构建完整投影列表再截取。暂停跟随和零游标场景必须保持精确未读计数。
+- **C4：保留完整快照作为兼容路径。** 保存、恢复、导出、复盘和全知观察不得因为 UI 优化而丢失历史或私密信息边界。
+
+PR #33 只增加离线测量、测试和文档，不修改生产快照、日志容器或权限逻辑。上述 C1—C4 是设计方向，尚未实施。
