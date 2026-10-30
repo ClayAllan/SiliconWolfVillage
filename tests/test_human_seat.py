@@ -1,6 +1,8 @@
 """真人入座模式的无网络回归测试。"""
+import json
 import tempfile
 import unittest
+from pathlib import Path
 
 from engine import config
 from engine.game_engine import GameEngine
@@ -141,8 +143,6 @@ class HumanSeatTests(unittest.TestCase):
         self.assertEqual(emitted, ["engine_yield"])
 
     def test_automatic_mode_waits_for_real_action_and_resumes_ai_flow(self):
-        import threading
-
         self.engine.human_seat = 1
         self.manager.ready = True
 
@@ -209,9 +209,8 @@ class HumanSeatTests(unittest.TestCase):
                     "speech": "完成本次行动后可以保存。",
                 }))
                 filename = service.save(directory)
-                self.assertTrue((__import__("pathlib").Path(directory) / filename).exists())
-                import json
-                saved = json.loads((__import__("pathlib").Path(directory) / filename).read_text(
+                self.assertTrue((Path(directory) / filename).exists())
+                saved = json.loads((Path(directory) / filename).read_text(
                     encoding="utf-8"
                 ))
                 self.assertEqual(saved["engine"]["human_seat"], 1)
