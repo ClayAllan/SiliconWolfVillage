@@ -94,6 +94,7 @@ class LiveFeedTests(unittest.TestCase):
         source = engine.public_log[-1]
         self.assertIsNot(full.public_log, engine.public_log)
         self.assertIs(full.public_log[-1], source)
+        self.assertIsInstance(full.public_log[-1], FrozenDict)
         self.assertIsNot(limited.public_log, engine.public_log)
         self.assertIsNot(limited.public_log[-1], source)
         self.assertNotIn("role", limited.public_log[-1])
