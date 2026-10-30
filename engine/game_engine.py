@@ -374,7 +374,7 @@ class GameEngine:
 
     def _ev(self, etype: str, status: str = "") -> dict:
         event = {"type": etype, "status": status, "phase": self.phase, "day": self.day}
-        if etype not in {"waiting", "compress_waiting"}:
+        if etype not in {"waiting", "compress_waiting", "human_waiting"}:
             self._record_event("engine_yield", yield_event=event)
         return event
 
@@ -660,6 +660,10 @@ class GameEngine:
             "game_id": self.game_id,
             "started_at": self.started_at,
             "board_name": self.board_name,
+            # Human identity is persistent game state. A pending form is not:
+            # readback resumes at a new night boundary, not inside a generator.
+            "human_seat": self.human_seat,
+            "human_private_messages": list(self.human_private_messages),
             "archive_basename": self.archive_basename,
             "archive_complete": self.archive_complete,
             "random_seed": self.random_seed,
@@ -700,6 +704,32 @@ class GameEngine:
 
     def load_state(self, data: dict):
         data = data or {}
+        human_seat = data.get("human_seat")
+        if human_seat is not None and (type(human_seat) is not int or not 1 <= human_seat <= 12):
+            raise ValueError("存档中的真人座位无效，已拒绝恢复")
+        human_actions = {
+            int(seat) for seat, rows in (data.get("reasoning_log") or {}).items()
+            if str(seat).isdigit() and any(
+                isinstance(row, dict) and (
+                    row.get("actor_source") == "human"
+                    or (row.get("response") or {}).get("_human_action")
+                    or (row.get("response") or {}).get("decision_source") == "human"
+                ) for row in (rows or [])
+            )
+        }
+        # Legacy human saves had no seat metadata. Fail closed rather than
+        # silently allowing AI to replace a human who already acted.
+        if human_actions and (human_seat is None or human_actions != {human_seat}):
+            raise ValueError("真人行动记录与真人座位不一致，无法安全恢复该存档")
+        private_messages = data.get("human_private_messages", [])
+        if not isinstance(private_messages, list) or not all(
+            isinstance(message, str) for message in private_messages
+        ):
+            raise ValueError("存档中的真人私密通知格式无效")
+        self.human_seat = human_seat
+        self.human_private_messages = list(private_messages)
+        self.pending_human_action = None
+        self._pending_human_context = None
         self.published_alive = {int(k): v for k, v in data.get("published_alive", {}).items()}
         self.war_board_recipients = list(data.get("war_board_recipients", []))
         self.game_id = data.get("game_id") or self.game_id
