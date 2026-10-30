@@ -80,6 +80,39 @@ class HumanSeatTests(unittest.TestCase):
             finally:
                 service.close()
 
+    def test_service_accepts_manual_self_explode_while_human_action_is_pending(self):
+        exploded = self.engine.wolves[0]
+        self.engine.human_seat = exploded
+        self.engine.day = 2
+        self.engine.phase = "第2天"
+
+        def pending_human_speech(deaths, peace_first):
+            yield from self.engine._ask(
+                exploded, "真人发言", "D2 发言", public=True
+            )
+
+        self.engine._run_day_discussion_and_vote_impl = pending_human_speech
+        generator = self.engine._run_day_discussion_and_vote({}, False)
+        with tempfile.TemporaryDirectory() as directory:
+            service = GameService(
+                self.engine, directory, automatic=False, generator=generator
+            )
+            try:
+                self.assertTrue(service.step())
+                self.assertEqual(
+                    service.snapshot().last_event_type, "human_input_required"
+                )
+                self.assertTrue(service.request_human_explode())
+                snapshot = service.snapshot()
+                self.assertFalse(snapshot.engine.players[exploded]["alive"])
+                self.assertEqual(
+                    snapshot.engine.pending_wolf_night_seats, [exploded]
+                )
+                self.assertIsNone(snapshot.engine.pending_human_action)
+                self.assertFalse(snapshot.engine._human_explode_requested)
+            finally:
+                service.close()
+
     def test_service_pauses_if_human_seat_has_an_ai_action_in_history(self):
         with tempfile.TemporaryDirectory() as directory:
             self.engine.reasoning_log[1].append({
