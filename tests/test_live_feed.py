@@ -6,6 +6,7 @@ from service.live_feed import (feed_identity, project_events, prepare_feed_state
                        request_scroll, unread_events, select_feed_window, schedule_page_refresh)
 from test_runtime_regressions import MemoryOnlyManager
 from service.view_projection import project_view
+from storage.immutable_log import FrozenDict, freeze_log_row
 
 
 class CountingRows(list):
@@ -40,6 +41,67 @@ class LiveFeedTests(unittest.TestCase):
         self.assertEqual(result[0]["game_id"], "snapshot-owner")
         self.assertNotIn("role", result[0])
         self.assertNotIn("game_id", original[1])
+
+
+    def test_project_events_shares_only_frozen_full_view_rows(self):
+        frozen = freeze_log_row({
+            "game_id": "g", "event_seq": 1, "kind": "player",
+            "role": "狼人", "text": "公开发言",
+            "meta": {"labels": ["public", "verified"]},
+        })
+
+        full, issues = project_events([frozen], "g", None)
+        self.assertFalse(issues)
+        self.assertIs(full[0], frozen)
+
+        limited, issues = project_events([frozen], "g", None, limited=True)
+        self.assertFalse(issues)
+        self.assertIsNot(limited[0], frozen)
+        self.assertIsInstance(limited[0], dict)
+        self.assertNotIn("role", limited[0])
+        self.assertIs(limited[0]["meta"], frozen["meta"])
+        limited[0]["text"] = "view-only edit"
+        self.assertEqual(frozen["text"], "公开发言")
+        with self.assertRaises(TypeError):
+            limited[0]["meta"]["labels"].append("changed")
+
+    def test_project_events_deepcopies_mutable_legacy_rows(self):
+        source = {
+            "game_id": "g", "event_seq": 1, "kind": "player",
+            "text": "legacy", "meta": {"labels": ["source"]},
+        }
+        projected, issues = project_events([source], "g", None)
+        self.assertFalse(issues)
+        self.assertIsNot(projected[0], source)
+        self.assertIsNot(projected[0]["meta"], source["meta"])
+        projected[0]["meta"]["labels"].append("projection")
+        self.assertEqual(source["meta"]["labels"], ["source"])
+
+    def test_project_view_shares_only_frozen_full_rows_and_sanitizes_limited_rows(self):
+        engine = GameEngine(MemoryOnlyManager())
+        engine.setup(config.GAME_BOARDS[config.DEFAULT_BOARD])
+        viewer = next(
+            seat for seat in range(1, 13)
+            if engine.roles[seat].camp != "狼人"
+        )
+        engine._append_public_item({
+            "kind": "player", "seat": viewer, "role": "狼人",
+            "text": "公开发言", "meta": {"labels": ["public"]},
+        })
+
+        full = project_view(engine)
+        limited = project_view(engine, viewer_seat=viewer)
+        source = engine.public_log[-1]
+        self.assertIsNot(full.public_log, engine.public_log)
+        self.assertIs(full.public_log[-1], source)
+        self.assertIsNot(limited.public_log, engine.public_log)
+        self.assertIsNot(limited.public_log[-1], source)
+        self.assertNotIn("role", limited.public_log[-1])
+        self.assertIs(limited.public_log[-1]["meta"], source["meta"])
+        with self.assertRaises(TypeError):
+            full.public_log[-1]["meta"]["labels"].append("changed")
+        with self.assertRaises(TypeError):
+            limited.public_log[-1]["meta"]["labels"].append("changed")
 
     def test_display_identity_is_stable_within_game_and_changes_on_context_switch(self):
         identity = feed_identity("a", "全知视角", 0, "全部动态")
