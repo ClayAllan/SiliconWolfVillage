@@ -651,7 +651,7 @@ def render_markdown(payload):
         "- Snapshot lock hold measures the Condition critical section, including engine deep copies and manager/runtime diagnostics.",
         "- Deepcopy time counts copy.deepcopy calls made by GameService.snapshot; it excludes project_view's separately imported deepcopy calls.",
         "- Optional field profiling maps each top-level engine attribute by object identity before snapshot and attributes only the corresponding outer deepcopy call; nested recursive copies remain within that field's elapsed time.",
-        "- Unattributed deepcopy includes manager/runtime diagnostics and snapshot metadata not copied from a top-level engine field.";
+        "- Unattributed deepcopy includes manager/runtime diagnostics and snapshot metadata not copied from a top-level engine field.",
         "- Integrity-guard timing runs the exact self-contained function extracted from app.py; synthetic human-seat records are marked as human actions.",
         "- The current two-snapshot path is compared in the same process with a legacy three-snapshot control; the paired delta is more useful than cross-run absolute timing.",
         "- The refresh harness reproduces the active-game state/data path, not Streamlit component rendering, websocket delivery, browser paint, or network latency.",
