@@ -39,6 +39,10 @@ class ImmutableLogTests(unittest.TestCase):
             frozen["notes"].clear()
         with self.assertRaises(TypeError):
             frozen.update({"other": True})
+        with self.assertRaises(TypeError):
+            frozen.__init__({"other": True})
+        with self.assertRaises(TypeError):
+            frozen["notes"].__init__(["mutable"])
 
         self.assertIs(copy.deepcopy(frozen), frozen)
         self.assertIs(copy.copy(frozen), frozen)
