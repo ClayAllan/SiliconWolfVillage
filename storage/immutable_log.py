@@ -6,7 +6,6 @@ append new events and replace logs when restoring a save.
 """
 from __future__ import annotations
 
-import copy
 
 
 class FrozenDict(dict):
