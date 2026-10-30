@@ -16,6 +16,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import random
 import statistics
 import sys
 import tempfile
@@ -54,6 +55,9 @@ class OfflineManager:
     def has_pending(self):
         return False
 
+    def cancel_all_pending(self, reason=""):
+        return None
+
     def get_usage_snapshot(self):
         return {"total_tokens": 0, "api_returns": 0}
 
@@ -64,6 +68,8 @@ class OfflineManager:
 def fixture(history_rows: int) -> tuple[GameEngine, int]:
     """Fixed content distribution: N public events and N//3 reasoning records."""
     engine = GameEngine(OfflineManager())
+    engine.random_seed = 20261030
+    engine.rng = random.Random(engine.random_seed)
     engine.setup(config.GAME_BOARDS[config.DEFAULT_BOARD])
     engine.game_id = "benchmark-synthetic-not-a-real-game"
     good_seat = next(s for s in range(1, 13) if engine.roles[s].camp != "狼人")
@@ -207,7 +213,8 @@ def run_case(history_rows: int, repeats: int) -> dict:
             }
             return case
         finally:
-            service.close()
+            with patch("service.game_service.archive_game", return_value=None):
+                service.close()
 
 
 def pulse_generator(engine):
@@ -266,7 +273,8 @@ def worker_contention(public_rows: int, duration: float, poll_interval: float) -
                     "snapshot_latency_during_worker": stats(latencies),
                 }
         finally:
-            service.close()
+            with patch("service.game_service.archive_game", return_value=None):
+                service.close()
 
 
 def render_markdown(payload: dict) -> str:
@@ -366,7 +374,7 @@ def main():
             "platform": platform.platform(),
             "cpu_count": os.cpu_count(),
             "repeats": args.repeats,
-            "seed_policy": "random engine roster; fixed event/role distribution",
+            "seed_policy": "fixed roster seed 20261030; fixed event/role distribution",
             "git_sha": os.getenv("GITHUB_SHA", "local"),
         },
         "cases": [],
