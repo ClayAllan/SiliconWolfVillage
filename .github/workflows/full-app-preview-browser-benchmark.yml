@@ -5,8 +5,7 @@ on:
     branches: [main]
     paths:
       - "app.py"
-      - "ui/ui_preview.py"
-      - "ui/feed_ui.py"
+      - "ui/**"
       - "tests/run_full_app_preview_browser_benchmark.py"
       - ".github/workflows/full-app-preview-browser-benchmark.yml"
   workflow_dispatch:
