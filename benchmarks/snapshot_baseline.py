@@ -204,11 +204,10 @@ def run_case(history_rows: int, repeats: int) -> dict:
             service.close()
 
 
-class PulseEngine(GameEngine):
-    def run(self):
-        while True:
-            self.day += 1
-            yield {"type": "night", "status": "synthetic progress"}
+def pulse_generator(engine):
+    while True:
+        engine.day += 1
+        yield {"type": "night", "status": "synthetic progress"}
 
 
 def worker_contention(public_rows: int, duration: float, poll_interval: float) -> dict:
@@ -217,10 +216,10 @@ def worker_contention(public_rows: int, duration: float, poll_interval: float) -
     This is a synthetic scheduling stressor, not an end-to-end browser FPS test.
     """
     engine, _ = fixture(public_rows)
-    # Preserve fixture state in a real GameService with a synthetic, non-network worker.
-    engine.__class__ = PulseEngine
+    # Preserve the fixture state while driving the real service lock and worker.
     with tempfile.TemporaryDirectory(prefix="swv-snapshot-worker-") as directory:
-        service = GameService(engine, directory, automatic=True, turbo=True, delay=0)
+        service = GameService(engine, directory, automatic=True, turbo=True, delay=0,
+                              generator=pulse_generator(engine))
         try:
             with patch("service.game_service.rerun_delay", return_value=0.005):
                 service.play()
