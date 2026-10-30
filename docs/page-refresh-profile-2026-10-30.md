@@ -129,7 +129,7 @@ app.py 中 sync_game_state() 的全部调用点：
 
 - Python 3.11：233 项测试通过；Wheel 构建通过。
 - Python 3.12：233 项测试通过；Wheel 构建通过。
-- Chromium：连续两次真实 ZIP 下载通过，文件 CRC/ZIP 有效性检查通过。
+- Chromium：连续两次真实 ZIP 下载通过，ZIP 文件有效性检查通过。
 - 离线 Snapshot 基准和页面刷新基准均成功。
 - 无付费模型调用。
 - PR #31 仅新增测量工具、离线测试和工作流；尚未改变生产代码。
