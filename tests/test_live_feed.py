@@ -185,6 +185,29 @@ class LiveFeedTests(unittest.TestCase):
         # Five visible rows, five additional unread rows, then the seen cursor.
         self.assertEqual(rows.read_count, 11)
 
+    def test_mark_seen_stops_after_window_without_enabling_follow(self):
+        rows = CountingRows(
+            {"event_seq": i, "kind": "player"} for i in range(1, 1001)
+        )
+        state = {
+            "feed_follow_latest": False,
+            "_feed_seen_seq": 100,
+            "_feed_mark_seen": True,
+        }
+        visible, unseen, truncated, tail = select_feed_window(
+            state, rows, show_god=True, channel="全部动态",
+            full_history=False, limit=5,
+        )
+
+        self.assertEqual([row["event_seq"] for row in visible], [996, 997, 998, 999, 1000])
+        self.assertEqual(unseen, 0)
+        self.assertTrue(truncated)
+        self.assertEqual(tail, 1000)
+        self.assertEqual(state["_feed_seen_seq"], 1000)
+        self.assertFalse(state["feed_follow_latest"])
+        self.assertNotIn("_feed_mark_seen", state)
+        self.assertEqual(rows.read_count, 6)
+
     def test_paused_from_zero_cursor_counts_all_unread_matching_rows(self):
         rows = CountingRows(
             {"event_seq": i, "kind": "player"} for i in range(1, 21)
