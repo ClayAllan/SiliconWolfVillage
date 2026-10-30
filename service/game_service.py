@@ -47,6 +47,26 @@ class GameSnapshot:
     runtime_diagnostics: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class GameRuntimeSnapshot:
+    """Small, lock-consistent service state for UI regions that do not need the engine."""
+    running: bool
+    done: bool
+    status: str
+    error: str
+    last_event_type: str
+    waiting_since: float
+    last_archive: dict | None
+    archive_error: str
+    runtime_diagnostics: dict
+    manager: object
+    react_budget: int | None
+    active_request_id: str | None
+    pending_human_action: dict | None
+    replay_logs: list
+    human_action_integrity_error: str
+
+
 class GameService:
     """同一对局的 next(gen)、控制、存档及快照共用一把锁。"""
 
@@ -215,89 +235,128 @@ class GameService:
             for key, value in vars(self._engine).items():
                 if key not in {"manager", "recorder"}:
                     setattr(view, key, copy.deepcopy(value))
-            view.manager = _UsageSnapshot(self._engine.manager)
+            runtime = self._runtime_snapshot_locked(
+                check_human_integrity=False,
+                include_engine_fields=False,
+            )
+            view.manager = runtime.manager
             view.recorder = None
-
-            manager = self._engine.manager
-            if hasattr(manager, "get_runtime_snapshot"):
-                pending = manager.get_runtime_snapshot()
-            else:
-                has_pending = bool(manager.has_pending()) if hasattr(manager, "has_pending") else False
-                pending = {
-                    "has_pending": has_pending,
-                    "pending_count": int(has_pending),
-                    "in_flight_count": int(has_pending),
-                    "pending_requests": [],
-                    "compression_pending_count": 0,
-                    "request_guard_count": 0,
-                    "transport_call_count": 0,
-                    "oldest_pending_seconds": None,
-                }
-
-            now = time.time()
-            human_waiting = bool(getattr(self._engine, "pending_human_action", None))
-            if self._closed:
-                wait_kind = "closed"
-            elif self._done:
-                wait_kind = "finished"
-            elif self._error:
-                wait_kind = "error_paused"
-            elif human_waiting:
-                wait_kind = "human_input"
-            elif self._running and pending.get("has_pending"):
-                wait_kind = "model_request"
-            elif self._running and self._automatic:
-                wait_kind = "automatic_progress"
-            elif self._running:
-                wait_kind = "manual_progress"
-            elif pending.get("has_pending"):
-                wait_kind = "paused_with_pending_request"
-            else:
-                wait_kind = "paused"
-
-            worker = self._worker
-            worker_alive = bool(worker and worker.is_alive())
-            worker_expected = bool(
-                self._running and self._automatic and not self._done and not self._closed
-            )
-            last_progress_at = getattr(self, "_last_progress_at", 0.0)
-            last_heartbeat_at = getattr(self, "_last_worker_heartbeat_at", 0.0)
-            runtime_diagnostics = {
-                "game_id": str(getattr(self._engine, "game_id", "")),
-                "wait_kind": wait_kind,
-                "running": self._running,
-                "automatic": self._automatic,
-                "done": self._done,
-                "closed": self._closed,
-                "worker_expected": worker_expected,
-                "worker_alive": worker_alive,
-                "worker_name": getattr(worker, "name", None),
-                "worker_started_at": getattr(self, "_worker_started_at", 0.0) or None,
-                "worker_heartbeat_at": last_heartbeat_at or None,
-                "worker_heartbeat_age_seconds": (
-                    round(max(0.0, now - last_heartbeat_at), 1) if last_heartbeat_at else None
-                ),
-                "last_progress_at": last_progress_at or None,
-                "last_progress_age_seconds": (
-                    round(max(0.0, now - last_progress_at), 1) if last_progress_at else None
-                ),
-                "waiting_since": self._waiting_since or None,
-                "waiting_age_seconds": (
-                    round(max(0.0, now - self._waiting_since), 1) if self._waiting_since else None
-                ),
-                "last_event_type": self._last_event_type,
-                "revision": self.revision,
-                "pending": copy.deepcopy(pending),
-                "error": self._error,
-                "archive_error": self._archive_error,
-            }
             return GameSnapshot(
-                engine=view, running=self._running, done=self._done, status=self._status,
-                error=self._error, last_event_type=self._last_event_type,
-                waiting_since=self._waiting_since,
-                last_archive=copy.deepcopy(self._last_archive), archive_error=self._archive_error,
-                runtime_diagnostics=runtime_diagnostics,
+                engine=view, running=runtime.running, done=runtime.done, status=runtime.status,
+                error=runtime.error, last_event_type=runtime.last_event_type,
+                waiting_since=runtime.waiting_since,
+                last_archive=runtime.last_archive, archive_error=runtime.archive_error,
+                runtime_diagnostics=runtime.runtime_diagnostics,
             )
+
+    def runtime_snapshot(self):
+        """Return current UI runtime state without deep-copying the game engine."""
+        with self._condition:
+            return self._runtime_snapshot_locked(
+                check_human_integrity=True,
+                include_engine_fields=True,
+            )
+
+    def _runtime_snapshot_locked(self, *, check_human_integrity, include_engine_fields):
+        manager = self._engine.manager
+        manager_view = _UsageSnapshot(manager)
+        if hasattr(manager, "get_runtime_snapshot"):
+            pending = manager.get_runtime_snapshot()
+        else:
+            has_pending = bool(manager.has_pending()) if hasattr(manager, "has_pending") else False
+            pending = {
+                "has_pending": has_pending,
+                "pending_count": int(has_pending),
+                "in_flight_count": int(has_pending),
+                "pending_requests": [],
+                "compression_pending_count": 0,
+                "request_guard_count": 0,
+                "transport_call_count": 0,
+                "oldest_pending_seconds": None,
+            }
+
+        now = time.time()
+        human_waiting = bool(getattr(self._engine, "pending_human_action", None))
+        if self._closed:
+            wait_kind = "closed"
+        elif self._done:
+            wait_kind = "finished"
+        elif self._error:
+            wait_kind = "error_paused"
+        elif human_waiting:
+            wait_kind = "human_input"
+        elif self._running and pending.get("has_pending"):
+            wait_kind = "model_request"
+        elif self._running and self._automatic:
+            wait_kind = "automatic_progress"
+        elif self._running:
+            wait_kind = "manual_progress"
+        elif pending.get("has_pending"):
+            wait_kind = "paused_with_pending_request"
+        else:
+            wait_kind = "paused"
+
+        worker = self._worker
+        worker_alive = bool(worker and worker.is_alive())
+        worker_expected = bool(
+            self._running and self._automatic and not self._done and not self._closed
+        )
+        last_progress_at = getattr(self, "_last_progress_at", 0.0)
+        last_heartbeat_at = getattr(self, "_last_worker_heartbeat_at", 0.0)
+        runtime_diagnostics = {
+            "game_id": str(getattr(self._engine, "game_id", "")),
+            "wait_kind": wait_kind,
+            "running": self._running,
+            "automatic": self._automatic,
+            "done": self._done,
+            "closed": self._closed,
+            "worker_expected": worker_expected,
+            "worker_alive": worker_alive,
+            "worker_name": getattr(worker, "name", None),
+            "worker_started_at": getattr(self, "_worker_started_at", 0.0) or None,
+            "worker_heartbeat_at": last_heartbeat_at or None,
+            "worker_heartbeat_age_seconds": (
+                round(max(0.0, now - last_heartbeat_at), 1) if last_heartbeat_at else None
+            ),
+            "last_progress_at": last_progress_at or None,
+            "last_progress_age_seconds": (
+                round(max(0.0, now - last_progress_at), 1) if last_progress_at else None
+            ),
+            "waiting_since": self._waiting_since or None,
+            "waiting_age_seconds": (
+                round(max(0.0, now - self._waiting_since), 1) if self._waiting_since else None
+            ),
+            "last_event_type": self._last_event_type,
+            "revision": self.revision,
+            "pending": copy.deepcopy(pending),
+            "error": self._error,
+            "archive_error": self._archive_error,
+        }
+        return GameRuntimeSnapshot(
+            running=self._running,
+            done=self._done,
+            status=self._status,
+            error=self._error,
+            last_event_type=self._last_event_type,
+            waiting_since=self._waiting_since,
+            last_archive=copy.deepcopy(self._last_archive),
+            archive_error=self._archive_error,
+            runtime_diagnostics=runtime_diagnostics,
+            manager=manager_view,
+            react_budget=getattr(self._engine, "react_budget", None),
+            active_request_id=getattr(self._engine, "_active_request_id", None),
+            pending_human_action=(
+                copy.deepcopy(getattr(self._engine, "pending_human_action", None))
+                if include_engine_fields else None
+            ),
+            replay_logs=(
+                copy.deepcopy(getattr(self._engine, "replay_logs", []))
+                if include_engine_fields else []
+            ),
+            human_action_integrity_error=(
+                self._human_action_integrity_error() if check_human_integrity else ""
+            ),
+        )
 
     def save(self, directory):
         with self._condition:
