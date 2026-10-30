@@ -11,7 +11,25 @@ from __future__ import annotations
 class FrozenDict(dict):
     """A dict-compatible container whose normal mutation APIs are disabled."""
 
-    __slots__ = ()
+    __slots__ = ("_sealed",)
+
+    def __init__(self, values=(), **kwargs):
+        if getattr(self, "_sealed", False):
+            raise TypeError("game log rows are immutable")
+        dict.__init__(self)
+        for key, value in dict(values, **kwargs).items():
+            dict.__setitem__(self, key, value)
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, name, value):
+        if getattr(self, "_sealed", False):
+            raise TypeError("game log rows are immutable")
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name):
+        if getattr(self, "_sealed", False):
+            raise TypeError("game log rows are immutable")
+        object.__delattr__(self, name)
 
     @staticmethod
     def _immutable(*_args, **_kwargs):
@@ -31,7 +49,23 @@ class FrozenDict(dict):
 class FrozenList(list):
     """A list-compatible container whose normal mutation APIs are disabled."""
 
-    __slots__ = ()
+    __slots__ = ("_sealed",)
+
+    def __init__(self, values=()):
+        if getattr(self, "_sealed", False):
+            raise TypeError("game log rows are immutable")
+        list.__init__(self, values)
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, name, value):
+        if getattr(self, "_sealed", False):
+            raise TypeError("game log rows are immutable")
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name):
+        if getattr(self, "_sealed", False):
+            raise TypeError("game log rows are immutable")
+        object.__delattr__(self, name)
 
     @staticmethod
     def _immutable(*_args, **_kwargs):
