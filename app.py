@@ -715,7 +715,7 @@ with st.sidebar:
 
     # ===== 💾 存档 / 读档（V6.0）=====
     with st.expander("💾 存档 / 读档"):
-        st.caption("先暂停再保存；若仍在等待玩家，单步收集已完成的响应或跳过当前玩家后再保存。")
+        st.caption("保存前请暂停自动推演、等待模型响应结束；真人行动未提交时请先提交，不能跳过或保存待处理的真人输入。")
         if engine:
             _busy = bool(
                 auto_running or engine.has_pending_action() or engine.manager.has_pending()
