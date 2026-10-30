@@ -33,6 +33,7 @@ from service import game_service as service_module
 from service.game_service import GameService
 from service.live_feed import feed_identity, prepare_feed_state, select_feed_window
 from service.view_projection import project_view
+from storage.immutable_log import freeze_log_row
 
 
 APP_PATH = ROOT / "app.py"
@@ -179,12 +180,16 @@ class SnapshotProbe:
 
 
 def mark_human_rows(engine, human_seat):
-    """Make the synthetic human seat pass the app's real anti-AI-takeover guard."""
-    for row in engine.reasoning_log.get(human_seat, []):
-        row["actor_source"] = "human"
-        response = row.setdefault("response", {})
+    """Mark synthetic rows as human actions without mutating a frozen history row."""
+    rows = engine.reasoning_log.get(human_seat, [])
+    for index, row in enumerate(rows):
+        updated = dict(row)
+        response = dict(updated.get("response") or {})
+        updated["actor_source"] = "human"
         response["_human_action"] = True
         response["decision_source"] = "human"
+        updated["response"] = response
+        rows[index] = freeze_log_row(updated)
 
 
 def load_integrity_guard():
