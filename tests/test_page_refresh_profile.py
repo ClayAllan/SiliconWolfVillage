@@ -93,6 +93,26 @@ class PageRefreshProfileTests(unittest.TestCase):
         self.assertEqual(engine.react_budget, 7)
         self.assertEqual(main_view_snapshot.engine.react_budget, 7)
 
+    def test_legacy_three_snapshot_control_includes_the_removed_sidebar_sync(self):
+        engine, human_seat = snapshot_baseline.fixture(120)
+        mark_human_rows(engine, human_seat)
+        guard = load_integrity_guard()
+
+        with tempfile.TemporaryDirectory(prefix="swv-legacy-refresh-profile-") as directory:
+            service = GameService(engine, directory, automatic=False)
+            probe = SnapshotProbe(service)
+            try:
+                profile = profile_page_refresh(
+                    service, probe, human_seat, guard, snapshot_count=3,
+                )
+            finally:
+                probe.close()
+                with patch("service.game_service.archive_game", return_value=None):
+                    service.close()
+
+        self.assertEqual(len(profile["snapshots"]), 3)
+        self.assertEqual(len(profile["integrity_guard_ms"]), 3)
+
     def test_page_refresh_profiles_two_isolated_snapshots(self):
         engine, human_seat = snapshot_baseline.fixture(120)
         mark_human_rows(engine, human_seat)
