@@ -324,7 +324,7 @@ P2-C 与 P2-D 是不同 GitHub Actions 运行，绝对毫秒值受共享 runner 
 
 ### 正确性验证
 
-- Python 3.11 / 3.12：各 **245 项离线回归测试通过**，Wheel 构建通过。
+- Python 3.11 / 3.12：各 **246 项离线回归测试通过**，Wheel 构建通过。
 - Chromium ZIP 下载集成测试通过。
 - 新增测试覆盖：全知视角复用冻结行、单一视角顶层脱敏、嵌套不可变数据共享、可变旧行深拷贝、视角列表与引擎列表隔离。
 - [测试运行](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41016028698)。
