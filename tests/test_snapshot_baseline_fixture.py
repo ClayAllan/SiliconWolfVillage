@@ -1,6 +1,7 @@
 import unittest
 
 from benchmarks.snapshot_baseline import fixture
+from storage.immutable_log import FrozenDict, FrozenList
 
 
 class SnapshotBaselineFixtureTests(unittest.TestCase):
@@ -15,6 +16,11 @@ class SnapshotBaselineFixtureTests(unittest.TestCase):
         self.assertEqual(min(counts), 3)
         self.assertEqual(max(counts), 4)
         self.assertLessEqual(max(counts) - min(counts), 1)
+        self.assertIsInstance(engine.public_log[0], FrozenDict)
+        self.assertIsInstance(engine.reasoning_log[1][0], FrozenDict)
+        self.assertIsInstance(engine.reasoning_log[1][0]["response"], FrozenDict)
+        self.assertIsInstance(engine.public_log, list)
+        self.assertIsInstance(engine.reasoning_log, dict)
 
 
 if __name__ == "__main__":
