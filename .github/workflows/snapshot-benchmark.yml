@@ -5,8 +5,10 @@ on:
     branches:
       - perf/snapshot-baseline
       - perf/snapshot-baseline-seat-balance
+      - fix/live-feed-window-exit
     paths:
       - benchmarks/snapshot_baseline.py
+      - service/live_feed.py
       - .github/workflows/snapshot-benchmark.yml
   workflow_dispatch:
 
