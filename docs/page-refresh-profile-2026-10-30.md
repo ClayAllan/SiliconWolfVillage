@@ -305,5 +305,55 @@ P2-C 与 P2-D 是不同 GitHub Actions 运行，绝对毫秒值受共享 runner 
 
 ### 状态说明
 
-- `app.py` 构建标记与 main 分支部署 Smoke 的预期标记均已更新为 `SWV-20261030-IMMUTABLE-LOG-V1`，用于区分本次生产实现与此前仅包含两快照优化的线上构建。
-- 本节证明的是生产实现分支上的离线正确性与性能测试结果。是否进入 `main`、是否部署到线上，仍须分别以 PR 合并状态和 main 分支部署 Smoke 在真实 Streamlit 页面中找到新标记为准。
+- PR #34 合并时，`app.py` 构建标记与 main 分支部署 Smoke 的预期标记均为 `SWV-20261030-IMMUTABLE-LOG-V1`；随后 P2-E 分支将两者更新为 `SWV-20261030-IMMUTABLE-PROJECTION-V1`，待 PR #35 合并后由新的 main 部署 Smoke 验收。
+- PR #34 已合并至 `main`，提交 `3c48b6d007fe11f9162f0c5e33c2a768e51af3cc`；main 分支 242 项测试通过。
+- [Streamlit 部署 Smoke](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41015622790) 已在真实页面中找到新标记，HTTP 200。P2-D 已确认部署生效。
+
+
+## 11. P2-E：视角投影复用不可变事件行（2026-10-30）
+
+### 实施内容与安全边界
+
+- `project_events()` 对生产 `FrozenDict` 行执行按视角区分的投影：
+  - 全知视角：若对局 ID 与事件序号已规范化，直接复用不可变行。
+  - 单一视角：复制顶层字典并删除 `role`，嵌套值因源行递归不可变而可安全共享。
+  - 旧存档、预览和其他可变日志：在投影边界深拷贝，保持原有隔离语义。
+- `project_view()` 不再对 `project_events()` 已经隔离的结果执行第二次全历史深拷贝。
+- `public_log` 外层仍是独立列表；全知视角中的冻结行不可修改，单一视角行的顶层可编辑但不含角色字段，嵌套数据不可修改。
+- 不改变事件过滤规则、狼人视角授权、夜间隐私、推理记录投影、Feed 游标、存档或底层日志历史。
+
+### 正确性验证
+
+- Python 3.11 / 3.12：各 **246 项离线回归测试通过**，Wheel 构建通过。
+- Chromium ZIP 下载集成测试通过。
+- 新增测试覆盖：全知视角复用冻结行、单一视角顶层脱敏、嵌套不可变数据共享、可变旧行深拷贝、视角列表与引擎列表隔离。
+- [测试运行](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41016028698)。
+- [性能基准运行](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41016028787)；[原始 Artifact](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41016028787/artifacts/12959598138)。
+- 被测提交：`239d355980713d86f87bf7c6ef2f9a01d1b3c587`；Python 3.11.17；4 个逻辑 CPU；离线合成数据，无付费模型调用。
+
+### 性能结果
+
+15,000 条公开事件，本次运行：
+
+| 指标 | P2-D（前一阶段） | P2-E | 变化 |
+|---|---:|---:|---:|
+| 全知视角投影 P50 | 42.05 ms | 11.59 ms | 下降约72.4% |
+| 单一真人视角投影 P50 | 24.58 ms | 7.42 ms | 下降约69.8% |
+| 全知完整数据链路 P50 | 48.24 ms | 18.28 ms | 下降约62.1% |
+| 真人完整数据链路 P50 | 30.29 ms | 14.89 ms | 下降约50.8% |
+
+以上 P2-D / P2-E 为不同 GitHub Actions 运行，绝对值受共享 runner 影响。更可靠的本次同运行配对结果：
+
+- 当前两快照页面数据链路：22.78 ms P50 / 27.87 ms P95。
+- 旧三快照对照：30.40 ms P50 / 36.67 ms P95。
+- 配对节省：7.64 ms，约25.4%。
+
+页面刷新中的投影成本 P50 为7.65ms，Snapshot deepcopy 为7.51ms，Feed 选择为0.039ms。当前主要数据路径已显著缩短；这些测量仍不包含 Streamlit 组件渲染、WebSocket 传输和浏览器绘制。
+
+### 部署验收标记
+
+`app.py` 构建标记与 main 分支部署 Smoke 预期均已更新为 `SWV-20261030-IMMUTABLE-PROJECTION-V1`。PR 合并后，必须由 main 分支部署 Smoke 在真实 Streamlit 页面中找到该标记，才能确认 P2-E 已部署。
+
+### 后续方向
+
+P2-D 与 P2-E 已分别压低快照复制和视角投影成本。下一步不应继续猜测瓶颈，而应增加真实页面侧测量：Streamlit 组件构建、动态 HTML 体积、WebSocket 传输、浏览器 DOM/绘制及不同历史长度下的内存占用。只有这些数据表明仍存在可复现瓶颈时，再决定是否优化 Feed 渲染或引入增量视图。

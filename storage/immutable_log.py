@@ -18,7 +18,9 @@ class FrozenDict(dict):
             raise TypeError("game log rows are immutable")
         dict.__init__(self)
         for key, value in dict(values, **kwargs).items():
-            dict.__setitem__(self, key, value)
+            if key is not None and not isinstance(key, (str, int, float, bool)):
+                raise TypeError("game log dictionary keys must be JSON-compatible")
+            dict.__setitem__(self, key, _freeze_json_value(value, set()))
         object.__setattr__(self, "_sealed", True)
 
     def __setattr__(self, name, value):
@@ -54,7 +56,7 @@ class FrozenList(list):
     def __init__(self, values=()):
         if getattr(self, "_sealed", False):
             raise TypeError("game log rows are immutable")
-        list.__init__(self, values)
+        list.__init__(self, (_freeze_json_value(value, set()) for value in values))
         object.__setattr__(self, "_sealed", True)
 
     def __setattr__(self, name, value):

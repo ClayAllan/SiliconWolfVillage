@@ -10,6 +10,7 @@ on:
       - perf/reduce-active-refresh-snapshots
       - perf/snapshot-field-cost-profile
       - perf/immutable-log-snapshot-production
+      - perf/project-view-immutable-rows
     paths:
       - benchmarks/snapshot_baseline.py
       - storage/immutable_log.py

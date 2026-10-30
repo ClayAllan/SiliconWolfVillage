@@ -135,7 +135,9 @@ def project_view(engine, viewer_seat=None):
         game_id=engine.game_id, board_name=engine.board_name, day=engine.day,
         phase=engine.phase, sheriff=engine.sheriff, winner=engine.winner,
         current_speaker=current, players=players,
-        public_log=deepcopy(public_rows),
+        # project_events already isolates mutable legacy rows and only shares
+        # recursively immutable production rows; a second full-history deepcopy is redundant.
+        public_log=public_rows,
         reasoning_log=logs,
         skill_states={seat: deepcopy(engine.roles[seat].skill_state()) for seat in (visible if viewer_seat is None else {viewer_seat})},
         war_board=deepcopy(engine.war_board) if war_board_allowed else None,
