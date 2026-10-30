@@ -97,6 +97,11 @@ class GameService:
         with self._condition:
             if self._closed or self._done:
                 return
+            # A human action is an input boundary, not a paused AI step.
+            # Resuming here previously started a worker yielding human_waiting
+            # indefinitely and writing repeated events.
+            if getattr(self._engine, "pending_human_action", None):
+                return
             if not self._publish_display():
                 return
             self._error = ""
@@ -160,6 +165,8 @@ class GameService:
                 return False
             if self._running and self._automatic:
                 raise RuntimeError("请先暂停自动推演再单步")
+            if getattr(self._engine, "pending_human_action", None):
+                return False
             return self._advance_locked()
 
     def submit_human_action(self, action_id, payload):
@@ -298,6 +305,8 @@ class GameService:
                 raise RuntimeError("对局已关闭")
             if (self._running and self._automatic) or self._engine.manager.has_pending():
                 raise RuntimeError("请先暂停并等待后台任务完成后再存档")
+            if getattr(self._engine, "pending_human_action", None):
+                raise RuntimeError("请先提交当前真人行动，不能保存悬而未决的行动")
             target_dir = Path(directory)
             target_dir.mkdir(parents=True, exist_ok=True)
             stamp = time.strftime("%Y%m%d_%H%M%S")
@@ -339,6 +348,7 @@ class GameService:
 
     def _ensure_worker_locked(self):
         if (not self._closed and not self._done and self._running and self._automatic
+                and not getattr(self._engine, "pending_human_action", None)
                 and self._worker is None):
             self._worker_started_at = time.time()
             self._last_worker_heartbeat_at = self._worker_started_at
@@ -433,17 +443,23 @@ class GameService:
             self.revision += 1
             self._last_event_type = event.get("type", "")
             self._status = event.get("status", "")
-            if self._last_event_type not in {"waiting", "compress_waiting"}:
+            waiting_events = {"waiting", "compress_waiting", "human_waiting"}
+            if self._last_event_type not in waiting_events:
                 self._last_progress_at = time.time()
             if self._last_event_type == "human_input_required":
-                # 不能持锁等待浏览器输入；暂停自动推进，提交行动后再唤醒。
+                # Do not hold the worker/service lock while waiting for a browser.
                 self._running = False
-                self._waiting_since = 0.0
-            if self._last_event_type in {"turn", "compress"}:
                 self._waiting_since = time.time()
-            elif self._last_event_type not in {"waiting", "compress_waiting"}:
+            elif self._last_event_type == "human_waiting":
+                # Defensive: an old caller must not be able to spin on this event.
+                self._running = False
+                if not self._waiting_since:
+                    self._waiting_since = time.time()
+            elif self._last_event_type in {"turn", "compress"}:
+                self._waiting_since = time.time()
+            elif self._last_event_type not in waiting_events:
                 self._waiting_since = 0.0
-            if self._last_event_type not in {"waiting", "compress_waiting"}:
+            if self._last_event_type not in waiting_events:
                 config.get_logger().info(f"STEP✓ {self._last_event_type} '{self._status}'")
             fatal = getattr(self._engine, "fatal_error", "")
             if fatal:
@@ -451,7 +467,7 @@ class GameService:
                 self._running = False
                 self._error = f"API已暂停: {fatal}"
                 self._status = "API 已暂停（查看诊断，应用设置后继续下一步）"
-            if self._last_event_type not in {"waiting", "compress_waiting"}:
+            if self._last_event_type not in waiting_events:
                 self._publish_display()
             if self._last_event_type == "end":
                 self._done = True
