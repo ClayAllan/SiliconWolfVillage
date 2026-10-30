@@ -229,6 +229,9 @@ def worker_contention(public_rows: int, duration: float, poll_interval: float) -
     This is a synthetic scheduling stressor, not an end-to-end browser FPS test.
     """
     engine, _ = fixture(public_rows)
+    # Worker stress simulates an all-AI session. AI-authored synthetic records
+    # on a human seat would correctly trip the production integrity guard.
+    engine.human_seat = None
     # Preserve the fixture state while driving the real service lock and worker.
     with tempfile.TemporaryDirectory(prefix="swv-snapshot-worker-") as directory:
         service = GameService(engine, directory, automatic=True, turbo=True, delay=0,
@@ -256,6 +259,13 @@ def worker_contention(public_rows: int, duration: float, poll_interval: float) -
                 loaded_seconds = time.perf_counter() - t1
                 loaded_steps = engine.day - loaded_start
 
+                if baseline_steps == 0 or loaded_steps == 0:
+                    diagnosis = service.snapshot()
+                    raise RuntimeError(
+                        "Synthetic worker did not make progress; invalid stress run: "
+                        f"baseline={baseline_steps}, loaded={loaded_steps}, "
+                        f"event={diagnosis.last_event_type}, error={diagnosis.error}"
+                    )
                 baseline_rate = baseline_steps / baseline_seconds
                 loaded_rate = loaded_steps / loaded_seconds
                 return {
