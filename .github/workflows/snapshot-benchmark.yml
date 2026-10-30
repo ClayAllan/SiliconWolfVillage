@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - perf/snapshot-baseline
+      - perf/snapshot-baseline-seat-balance
     paths:
       - benchmarks/snapshot_baseline.py
       - .github/workflows/snapshot-benchmark.yml
