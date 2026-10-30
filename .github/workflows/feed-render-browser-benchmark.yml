@@ -1,0 +1,54 @@
+name: Feed browser-render benchmark
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "benchmarks/feed_render_fixture.py"
+      - "tests/fixtures/feed_render_benchmark_app.py"
+      - "tests/run_feed_render_browser_benchmark.py"
+      - "tests/test_feed_render_benchmark_fixture.py"
+      - "ui/feed_ui.py"
+      - "ui/ui_design.py"
+      - ".github/workflows/feed-render-browser-benchmark.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-render:
+    name: Streamlit feed render in Chromium
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install project and browser dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt playwright
+          python -m playwright install --with-deps chromium
+      - name: Validate deterministic benchmark fixture
+        run: python -m unittest discover -s tests -p "test_feed_render_benchmark_fixture.py" -v
+      - name: Measure production feed component in Chromium
+        run: python tests/run_feed_render_browser_benchmark.py --sizes 100,1000,5000,15000 --repeats 3
+      - name: Publish browser-render summary
+        if: always()
+        run: |
+          if [ -f benchmark-results/feed-render-browser.md ]; then
+            cat benchmark-results/feed-render-browser.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload inspectable browser-render measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feed-render-browser-${{ github.sha }}
+          path: benchmark-results/
+          if-no-files-found: warn
+          retention-days: 30
