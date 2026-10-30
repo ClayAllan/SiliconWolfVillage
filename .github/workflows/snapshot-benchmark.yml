@@ -1,0 +1,45 @@
+name: Snapshot performance benchmark
+
+on:
+  push:
+    branches:
+      - perf/snapshot-baseline
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    name: Offline snapshot baseline (Python 3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Measure snapshot, projection, feed and worker contention
+        run: |
+          python benchmarks/snapshot_baseline.py --sizes 100,1000,5000,15000 --repeats 9 --stress-seconds 1.5 --poll-interval 0.05
+      - name: Publish human-readable summary
+        if: always()
+        run: |
+          if [ -f benchmark-results/snapshot-baseline.md ]; then
+            cat benchmark-results/snapshot-baseline.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload inspectable baseline
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-baseline-${{ github.sha }}
+          path: benchmark-results/
+          if-no-files-found: warn
+          retention-days: 30
