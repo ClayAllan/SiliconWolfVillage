@@ -1,6 +1,8 @@
 """实时动态的数据边界与滚动状态；不推进对局，也不调用模型。"""
 import hashlib
 
+from storage.immutable_log import FrozenDict
+
 
 def feed_identity(game_id, viewer_mode, viewer_seat, channel):
     value = f"{game_id}|{viewer_mode}|{viewer_seat}|{channel}"
@@ -8,7 +10,13 @@ def feed_identity(game_id, viewer_mode, viewer_seat, channel):
 
 
 def project_events(rows, game_id, winner, *, limited=False):
-    """只投影当前引擎持有的日志。无ID旧行仅在该明确快照边界兼容。"""
+    """Project event rows without exposing mutable engine-owned payloads.
+
+    Frozen production rows can be reused for an authorized full view. A limited
+    view gets a new top-level dict with private role data removed; its nested
+    values are safe to share because the source row is recursively immutable.
+    Legacy or unsupported mutable rows are deep-copied at this boundary.
+    """
     result, issues = [], []
     for index, original in enumerate(rows):
         if original.get("game_id", game_id) != game_id:
@@ -19,11 +27,25 @@ def project_events(rows, game_id, winner, *, limited=False):
             continue
         if limited and original.get("kind") not in {"judge", "player", "votechart", "win"}:
             continue
-        row = dict(original)
-        row["game_id"] = game_id
-        row["event_seq"] = original.get("event_seq", index + 1)
-        if limited:
-            row.pop("role", None)
+
+        can_share_full_row = (
+            isinstance(original, FrozenDict)
+            and not limited
+            and original.get("game_id", game_id) == game_id
+            and "event_seq" in original
+        )
+        if can_share_full_row:
+            row = original
+        elif isinstance(original, FrozenDict):
+            row = dict(original)
+        else:
+            row = deepcopy(dict(original))
+
+        if row is not original:
+            row["game_id"] = game_id
+            row["event_seq"] = original.get("event_seq", index + 1)
+            if limited:
+                row.pop("role", None)
         result.append(row)
     return result, tuple(issues)
 
