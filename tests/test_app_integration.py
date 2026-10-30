@@ -127,6 +127,20 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(engine.reasoning_log[human_seat][-1]["actor_source"], "human")
         self.assertIsNone(engine.pending_human_action)
 
+    def test_pending_human_form_blocks_resume_step_and_save_in_ui(self):
+        engine, service, human_seat = self.install_pending_human_action("good")
+        self.app.run()
+        self.assert_clean()
+        self.assertTrue(any("轮到你行动" in item.value for item in self.app.subheader))
+        resume = next(button for button in self.app.button if button.label == "▶️ 继续")
+        step = next(button for button in self.app.button if button.label == "⏭️ 单步")
+        save = next(button for button in self.app.button if button.label == "💾 保存当前进度")
+        self.assertTrue(resume.disabled)
+        self.assertTrue(step.disabled)
+        self.assertTrue(save.disabled)
+        self.assertEqual(service.snapshot().runtime_diagnostics["wait_kind"], "human_input")
+        self.assertIsNotNone(engine.pending_human_action)
+
     def test_living_human_wolf_sees_teammate_discussion_in_ui(self):
         engine, service, human_seat = self.install_pending_human_action("wolf")
         teammate = next(seat for seat in engine.wolves if seat != human_seat)
