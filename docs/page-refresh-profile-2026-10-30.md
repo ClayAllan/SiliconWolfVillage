@@ -263,7 +263,7 @@ PR #33 只增加离线测量、测试和文档，不修改生产快照、日志�
 - Chromium：ZIP 下载集成测试通过。
 - 新增测试覆盖嵌套 dict/list 冻结、修改与重新初始化保护、原始对象与冻结副本隔离、不可支持数据回退、引擎追加、快照共享边界、读档后重新冻结、JSON 序列化及事件序号连续性。
 - 测试运行：[GitHub Actions](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41014496732)。
-- 被测提交：`34a1077bbb30374f018e5c2b5f8acb890a23d5`。
+- 被测提交：`34a1077bbb30374f80553d7ad6e4cb208dd577a5`。
 - 性能运行：[GitHub Actions](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41014496820)；[原始测量 Artifact](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41014496820/artifacts/12958658849)。
 - Python 3.11.17，GitHub 托管 Ubuntu，4 个逻辑 CPU；100 / 1,000 / 5,000 / 15,000 条合成公开事件，每约3条公开事件对应1条推理记录，覆盖12席；离线 manager，无付费模型调用。
 
