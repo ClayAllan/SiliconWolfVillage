@@ -127,6 +127,39 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(engine.reasoning_log[human_seat][-1]["actor_source"], "human")
         self.assertIsNone(engine.pending_human_action)
 
+    def test_human_rerun_uses_runtime_snapshot_for_intermediate_sidebar_sync(self):
+        engine, service, human_seat = self.install_pending_human_action(1)
+        calls = []
+        original_full_snapshot = GameService.snapshot
+        original_runtime_snapshot = GameService.runtime_snapshot
+
+        def counted_full_snapshot(instance):
+            calls.append("full")
+            return original_full_snapshot(instance)
+
+        def counted_runtime_snapshot(instance):
+            calls.append("runtime")
+            return original_runtime_snapshot(instance)
+
+        with patch.object(
+            GameService, "snapshot", autospec=True, side_effect=counted_full_snapshot
+        ), patch.object(
+            GameService, "runtime_snapshot", autospec=True, side_effect=counted_runtime_snapshot
+        ):
+            self.app.run()
+
+        self.assert_clean()
+        self.assertEqual(calls, ["full", "runtime", "full"])
+        self.assertTrue(any("轮到你行动" in item.value for item in self.app.subheader))
+        resume = next(button for button in self.app.button if button.label == "▶️ 继续")
+        step = next(button for button in self.app.button if button.label == "⏭️ 单步")
+        save = next(button for button in self.app.button if button.label == "💾 保存当前进度")
+        self.assertTrue(resume.disabled)
+        self.assertTrue(step.disabled)
+        self.assertTrue(save.disabled)
+        self.assertIsNotNone(engine.pending_human_action)
+        self.assertEqual(service.snapshot().last_event_type, "human_input_required")
+
     def test_pending_human_form_blocks_resume_step_and_save_in_ui(self):
         engine, service, human_seat = self.install_pending_human_action("good")
         self.app.run()
