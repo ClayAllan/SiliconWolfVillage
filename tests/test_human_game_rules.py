@@ -3,6 +3,7 @@ import unittest
 
 from engine import config
 from engine.game_engine import GameEngine
+from engine.roles import ROLE_CLASSES
 from service.view_projection import project_view
 from test_runtime_regressions import MemoryOnlyManager
 
@@ -184,6 +185,191 @@ class HumanGameRulesTests(unittest.TestCase):
             self.assertEqual(after.players[seat]["role"], self.engine.players[seat]["role"])
         self.assertIsNone(after.war_board)
         self.assertEqual(after.wolf_talk, [])
+
+
+    def test_human_self_explode_interrupts_pending_human_action(self):
+        exploded = self.engine.wolves[0]
+        self.engine.human_seat = exploded
+        self.engine.day = 2
+        self.engine.phase = "第2天"
+
+        def pending_human_speech(deaths, peace_first):
+            yield from self.engine._ask(
+                exploded, "真人发言", "D2 发言", public=True
+            )
+
+        self.engine._run_day_discussion_and_vote_impl = pending_human_speech
+        stage = self.engine._run_day_discussion_and_vote({}, False)
+        event = next(stage)
+        self.assertEqual(event["type"], "human_input_required")
+        self.assertEqual(self.engine._human_explode_window, "discussion")
+
+        self.engine.request_human_explode()
+        with self.assertRaises(StopIteration):
+            next(stage)
+
+        self.assertFalse(self.engine.players[exploded]["alive"])
+        self.assertEqual(self.engine.pending_wolf_night_seats, [exploded])
+        self.assertEqual(self.engine.pending_wolf_night_day, 3)
+        self.assertIsNone(self.engine.pending_human_action)
+        self.assertFalse(self.engine._human_explode_requested)
+        self.assertIsNone(self.engine._human_explode_window)
+
+    def test_human_self_explode_cancels_inflight_ai_action_without_recording_it(self):
+        exploded = self.engine.wolves[0]
+        ai_seat = next(
+            seat for seat in self.engine.alive_seats()
+            if seat != exploded and self.engine.roles[seat].camp != "狼人"
+        )
+        self.engine.human_seat = exploded
+        self.engine.day = 2
+        self.engine.phase = "第2天"
+
+        def pending_ai_speech(deaths, peace_first):
+            yield from self.engine._ask(
+                ai_seat, "AI发言", "D2 发言", public=True
+            )
+
+        self.engine._run_day_discussion_and_vote_impl = pending_ai_speech
+        stage = self.engine._run_day_discussion_and_vote({}, False)
+        event = next(stage)
+        self.assertEqual(event["type"], "turn")
+        self.assertTrue(self.manager.pending)
+
+        self.engine.request_human_explode()
+        with self.assertRaises(StopIteration):
+            next(stage)
+
+        self.assertFalse(self.manager.pending)
+        self.assertFalse(self.engine.players[exploded]["alive"])
+        self.assertFalse(any(
+            row.get("label") == "D2 发言"
+            for row in self.engine.reasoning_log[ai_seat]
+        ))
+        self.assertEqual(self.engine.pending_wolf_night_seats, [exploded])
+
+    def test_human_self_explode_rejects_wrong_phase_and_good_role(self):
+        wolf = self.engine.wolves[0]
+        self.engine.human_seat = wolf
+        self.engine.day = 2
+        self.engine.phase = "第2天"
+        with self.assertRaisesRegex(RuntimeError, "白天行动阶段"):
+            self.engine.request_human_explode()
+
+        good = next(
+            seat for seat in self.engine.alive_seats()
+            if self.engine.roles[seat].camp != "狼人"
+        )
+        self.engine.human_seat = good
+        self.engine._human_explode_window = "discussion"
+        with self.assertRaisesRegex(RuntimeError, "没有自爆权"):
+            self.engine.request_human_explode()
+
+
+    def test_human_self_explode_interrupts_sheriff_election(self):
+        exploded = self.engine.wolves[0]
+        self.engine.human_seat = exploded
+        self.engine.day = 1
+        self.engine.phase = "第1天"
+        self.engine.election_state = 0
+
+        election = self.engine._run_election()
+        event = next(election)
+        self.assertEqual(event["type"], "election")
+        self.assertEqual(self.engine._human_explode_window, "election")
+
+        self.engine.request_human_explode()
+        with self.assertRaises(StopIteration):
+            next(election)
+
+        self.assertFalse(self.engine.players[exploded]["alive"])
+        self.assertEqual(self.engine.election_state, 2)
+        self.assertEqual(self.engine.pending_wolf_night_day, 2)
+        self.assertEqual(self.engine.pending_wolf_night_seats, [exploded])
+
+    def test_white_wolf_king_human_explosion_uses_selected_target(self):
+        exploded = self.engine.wolves[0]
+        self.engine.roles[exploded].role_name = "白狼王"
+        self.engine.players[exploded]["role"] = "白狼王"
+        target = next(
+            seat for seat in self.engine.alive_seats()
+            if seat != exploded
+            and self.engine.roles[seat].camp != "狼人"
+            and self.engine.roles[seat].role_name != "猎人"
+        )
+        self.engine.human_seat = exploded
+        self.engine.day = 2
+        self.engine.phase = "第2天"
+
+        def pending_human_speech(deaths, peace_first):
+            yield from self.engine._ask(
+                exploded, "真人发言", "D2 发言", public=True
+            )
+
+        self.engine._run_day_discussion_and_vote_impl = pending_human_speech
+        stage = self.engine._run_day_discussion_and_vote({}, False)
+        self.assertEqual(next(stage)["type"], "human_input_required")
+        self.engine.request_human_explode(target)
+        with self.assertRaises(StopIteration):
+            next(stage)
+
+        self.assertFalse(self.engine.players[exploded]["alive"])
+        self.assertFalse(self.engine.players[target]["alive"])
+        self.assertEqual(self.engine.explosion_events[-1]["target"], target)
+
+    def test_human_private_skill_results_are_visible_after_actions(self):
+        seat = 1
+        scenarios = [
+            ("狼美人", {"vote_target": 2}, "狼美人魅惑结果"),
+            ("摄梦人", {"vote_target": 2}, "摄梦结果"),
+            ("魔术师", {"targets": [2, 3]}, "魔术师交换结果"),
+            ("守墓人", {"speech": "已确认"}, "守墓人验墓结果"),
+            ("女巫", {"use_antidote": True}, "女巫解药结果"),
+        ]
+        for role_name, payload, expected in scenarios:
+            with self.subTest(role=role_name):
+                role = ROLE_CLASSES[role_name](seat)
+                self.engine.roles[seat] = role
+                self.engine.players[seat]["role"] = role_name
+                self.engine.human_seat = seat
+                self.engine.day = 2
+                self.engine.phase = "第2夜"
+                self.engine.night = {}
+                self.engine.human_private_messages = []
+                if role_name == "守墓人":
+                    self.engine.last_exiled_seat = 12
+                    self.engine.last_exiled_camp = "狼人"
+                elif role_name == "女巫":
+                    self.engine.night["wolf_kill"] = 2
+
+                action = self.engine._run_solo_night(role)
+                self.assertEqual(next(action)["type"], "human_input_required")
+                pending = self.engine.pending_human_action
+                self.engine.submit_human_action(pending["action_id"], payload)
+                self.assertEqual(next(action)["type"], "done")
+                with self.assertRaises(StopIteration):
+                    next(action)
+                self.assertTrue(any(
+                    expected in message for message in self.engine.human_private_messages
+                ))
+
+        cupid = ROLE_CLASSES["丘比特"](seat)
+        self.engine.roles[seat] = cupid
+        self.engine.players[seat]["role"] = "丘比特"
+        self.engine.human_seat = seat
+        self.engine.lovers = None
+        self.engine.human_private_messages = []
+        link_action = self.engine._run_cupid_link()
+        self.assertEqual(next(link_action)["type"], "cupid")
+        self.assertEqual(next(link_action)["type"], "human_input_required")
+        pending = self.engine.pending_human_action
+        self.engine.submit_human_action(pending["action_id"], {"targets": [2, 3]})
+        self.assertEqual(next(link_action)["type"], "done")
+        with self.assertRaises(StopIteration):
+            next(link_action)
+        self.assertTrue(any(
+            "丘比特连线结果" in message for message in self.engine.human_private_messages
+        ))
 
 
 if __name__ == "__main__":

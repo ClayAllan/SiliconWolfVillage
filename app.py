@@ -33,7 +33,7 @@ from ui.feed_ui import render_feed
 
 # 手动进度存档与自动终局档案分开保存。
 # 该标记用于区分线上实际运行的构建与尚未部署的 main/PR 代码。
-APP_BUILD_MARKER = "SWV-20261030-IMMUTABLE-PROJECTION-V1"
+APP_BUILD_MARKER = "SWV-20261030-HUMAN-EXPLODE-PRIVATE-SKILLS-V1"
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Keep this key stable with storage.archive_zip.PRIVATE_ARCHIVE_ZIP_CACHE_KEY.
@@ -848,14 +848,50 @@ if live_engine is not None and getattr(live_engine, "human_seat", None) is not N
             for message in private_messages[-8:]:
                 st.write(message)
     pending = getattr(live_engine, "pending_human_action", None)
+    human_seat = live_engine.human_seat
+    human_role = live_engine.roles.get(human_seat) if human_seat in live_engine.roles else None
+    can_human_explode = bool(
+        live_engine.players.get(human_seat, {}).get("alive", False)
+        and human_role is not None
+        and getattr(human_role, "camp", "") == "狼人"
+        and getattr(human_role, "role_name", "") not in {"狼美人", "恶灵骑士"}
+    )
+    if can_human_explode:
+        explode_window = getattr(live_engine, "_human_explode_window", None)
+        explode_target = 0
+        if getattr(human_role, "role_name", "") == "白狼王" and explode_window == "discussion":
+            target_choices = [0] + [seat for seat in live_engine.alive_seats() if seat != human_seat]
+            explode_target = st.selectbox(
+                "白狼王带走目标", target_choices,
+                format_func=lambda seat: "不带走玩家" if seat == 0 else f"{seat} 号",
+                key=f"human_explode_target_{live_engine.game_id}",
+            )
+        explode_disabled = (
+            explode_window not in {"election", "discussion"}
+            or getattr(live_engine, "_human_explode_requested", False)
+            or ss.done or ss.game_service is None
+        )
+        if st.button(
+            "💥 自爆", key=f"human_explode_{live_engine.game_id}",
+            type="secondary", use_container_width=True, disabled=explode_disabled,
+        ):
+            try:
+                ss.game_service.request_human_explode(explode_target)
+                sync_game_state()
+                st.rerun()
+            except (ValueError, RuntimeError) as error:
+                st.error(f"自爆未执行：{error}")
+        if explode_disabled:
+            st.caption("自爆按钮常驻显示，仅在白天允许的行动窗口开放；投票开始后不可自爆。")
     if pending and pending.get("seat") == live_engine.human_seat:
         st.subheader("🎮 轮到你行动")
         st.caption(f"{pending.get('label', '当前行动')} · {pending.get('phase', '')} · {pending.get('seat')} 号")
-        with st.expander("本次行动说明", expanded=False):
+        with st.expander("本次行动说明", expanded=(pending.get("kind") == "ack")):
             st.write(pending.get("prompt", "请按规则完成当前行动。"))
         kind = pending.get("kind", "speech")
         targets = pending.get("allowed_targets") or []
         payload = {}
+        form_valid = True
         with st.form(f"human_action_{pending['action_id']}"):
             if kind in {"speech", "consolidation"}:
                 payload["speech"] = st.text_area("你的发言", key=f"human_speech_{pending['action_id']}",
@@ -867,18 +903,47 @@ if live_engine is not None and getattr(live_engine, "human_seat", None) is not N
                     payload["vote_target"] = st.selectbox(
                         "归票目标", choices, format_func=lambda seat: "不归票 / 弃票" if seat == 0 else f"{seat} 号",
                         key=f"human_target_{pending['action_id']}")
-                if "is_explode" in (pending.get("allowed_flags") or []):
-                    payload["is_explode"] = st.checkbox("发言后立即自爆", key=f"human_explode_{pending['action_id']}")
-            elif kind in {"vote", "check", "guard", "poison", "hunt"}:
+            elif kind in {"vote", "check", "guard", "poison", "hunt", "charm", "dream"}:
                 choices = list(targets) or [0]
                 labels = {"vote": "投票目标", "check": "查验目标", "guard": "守护目标",
-                          "poison": "毒药目标", "hunt": "开枪目标"}
+                          "poison": "毒药目标", "hunt": "开枪目标", "charm": "魅惑目标",
+                          "dream": "摄梦目标"}
                 payload["vote_target"] = st.selectbox(
                     labels.get(kind, "行动目标"), choices,
-                    format_func=lambda seat: "弃票 / 不执行" if seat == 0 else f"{seat} 号",
+                    format_func=lambda seat: (
+                        "弃票" if kind == "vote" else
+                        "空守" if kind == "guard" else
+                        "不使用毒药" if kind == "poison" else
+                        "不开枪" if kind == "hunt" else "不执行"
+                    ) if seat == 0 else f"{seat} 号",
                     key=f"human_target_{pending['action_id']}")
+            elif kind in {"link", "swap"}:
+                choices = list(targets)
+                if len(choices) < 2:
+                    st.warning("当前没有足够的合法座位供选择。")
+                    form_valid = False
+                else:
+                    first = st.selectbox(
+                        "第一位玩家", choices,
+                        format_func=lambda seat: f"{seat} 号",
+                        key=f"human_pair_first_{pending['action_id']}",
+                    )
+                    second_choices = choices[1:] + choices[:1]
+                    second = st.selectbox(
+                        "第二位玩家", second_choices,
+                        format_func=lambda seat: f"{seat} 号",
+                        key=f"human_pair_second_{pending['action_id']}",
+                    )
+                    if first == second:
+                        st.warning("两位玩家必须不同，请调整其中一个选择。")
+                        form_valid = False
+                    else:
+                        payload["targets"] = [first, second]
             elif kind == "antidote":
                 payload["use_antidote"] = st.checkbox("使用解药", key=f"human_antidote_{pending['action_id']}")
+            elif kind == "ack":
+                payload["speech"] = "已确认"
+                st.caption("请先阅读上方私密验墓信息，确认后继续。")
             elif kind in {"join_police", "withdraw"}:
                 payload[kind] = st.checkbox("确认上警" if kind == "join_police" else "确认退水",
                                             key=f"human_flag_{pending['action_id']}")
@@ -891,10 +956,23 @@ if live_engine is not None and getattr(live_engine, "human_seat", None) is not N
                     "警徽处理", choices, format_func=lambda seat: "撕毁警徽" if seat == 0 else f"移交给 {seat} 号",
                     key=f"human_badge_{pending['action_id']}")
             elif kind == "react_explode":
-                payload["is_explode"] = st.checkbox("立即自爆", key=f"human_react_{pending['action_id']}")
+                payload["is_explode"] = False
+                st.caption("如需自爆，请使用上方常驻按钮；提交本项表示本次不自爆。")
+            elif kind == "react_duel":
+                payload["is_duel"] = st.checkbox("立即发动骑士决斗", key=f"human_duel_{pending['action_id']}")
+                if payload["is_duel"]:
+                    duel_targets = [seat for seat in live_engine.alive_seats() if seat != human_seat]
+                    payload["duel_target"] = st.selectbox(
+                        "决斗目标", duel_targets, format_func=lambda seat: f"{seat} 号",
+                        key=f"human_duel_target_{pending['action_id']}",
+                    )
             else:
                 st.warning(f"暂不支持的真人行动类型：{kind}")
-            submitted = st.form_submit_button("提交行动", type="primary", use_container_width=True)
+            submit_label = "本次不自爆，继续" if kind == "react_explode" else "提交行动"
+            submitted = st.form_submit_button(
+                submit_label, type="primary", use_container_width=True,
+                disabled=not form_valid,
+            )
         if submitted:
             try:
                 ss.game_service.submit_human_action(pending["action_id"], payload)

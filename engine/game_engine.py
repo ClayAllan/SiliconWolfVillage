@@ -50,6 +50,10 @@ WOLF_KILL_TACTICS = (
 # ============================================================
 # 游戏引擎主体
 # ============================================================
+class _HumanExplodeInterrupt(Exception):
+    """Unwind the current daytime action so a human-triggered explosion wins the race."""
+
+
 class GameEngine:
     def __init__(self, manager):
         self.manager = manager
@@ -112,6 +116,9 @@ class GameEngine:
         self.human_seat = None
         self.pending_human_action = None
         self._pending_human_context = None
+        self._human_explode_requested = False
+        self._human_explode_target = 0
+        self._human_explode_window = None
         self.human_private_messages = []
         # 当前夜晚已完成的狼队讨论；只通过狼人视角投影给狼队成员。
         self.current_wolf_talk = []
@@ -174,6 +181,9 @@ class GameEngine:
         self.pending_wolf_night_seats = []
         self.pending_wolf_night_day = None
         self.active_last_stand_wolves = []
+        self._human_explode_requested = False
+        self._human_explode_target = 0
+        self._human_explode_window = None
         # —— 复盘档案：开篇 + 真身配置 ——
         self.replay_logs = []
         self.objective_events = []
@@ -853,6 +863,9 @@ class GameEngine:
         self._active_request_id = None
         self._active_compression_id = None
         self._skip_current = False
+        self._human_explode_requested = False
+        self._human_explode_target = 0
+        self._human_explode_window = None
         self.fatal_error = ""
         self._resume = True   # ★关键：标记读档，run() 据此跳过开场、从下一夜续跑(详见 run())
 
@@ -898,6 +911,60 @@ class GameEngine:
         self.pending_human_action = None
         self._pending_human_context = None
         return True
+
+    def request_human_explode(self, target=0):
+        """Queue a deliberate human self-explosion during an eligible daytime window."""
+        if self.winner:
+            raise RuntimeError("对局已结束，不能自爆")
+        seat = self.human_seat
+        if seat is None or seat not in self.roles:
+            raise RuntimeError("当前没有配置真人玩家")
+        if not self.players.get(seat, {}).get("alive", False):
+            raise RuntimeError("已出局，不能自爆")
+        role = self.roles[seat]
+        if role.camp != "狼人" or role.role_name in {"狼美人", "恶灵骑士"}:
+            raise RuntimeError("当前身份没有自爆权")
+        if self._human_explode_window not in {"election", "discussion"}:
+            raise RuntimeError("当前不是允许自爆的白天行动阶段")
+        if self._day_interrupted:
+            raise RuntimeError("本日已经因其他技能中断，不能再次自爆")
+        if self._human_explode_requested:
+            raise RuntimeError("自爆请求已经提交，正在处理中")
+        try:
+            target = int(target or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("白狼王带走目标必须是合法座位号") from exc
+        if role.role_name == "白狼王" and self._human_explode_window == "discussion":
+            if target and (target == seat or target not in self.alive_seats()):
+                raise ValueError("白狼王只能带走其他存活玩家")
+        else:
+            target = 0
+        self._human_explode_requested = True
+        self._human_explode_target = target
+        # 若真人正在填写普通行动，取消该表单；引擎恢复后优先处理自爆指令。
+        self.pending_human_action = None
+        self._pending_human_context = None
+        config.get_logger().info(
+            f"HUMAN_EXPLODE_REQUEST seat={seat} target={target} window={self._human_explode_window}"
+        )
+        self._record_event(
+            "human_explode_requested", seat=seat, target=target,
+            window=self._human_explode_window, phase=self.phase,
+        )
+        return True
+
+    def _raise_human_explode_interrupt(self, request_id=None):
+        if not self._human_explode_requested:
+            return
+        if request_id:
+            try:
+                # Discard the in-flight AI answer: the human command takes precedence.
+                self.manager.cancel_ai_response(request_id, "真人玩家主动自爆")
+            finally:
+                if self._active_request_id == request_id:
+                    self._active_request_id = None
+        self._skip_current = False
+        raise _HumanExplodeInterrupt()
 
     # ========================================================
     # 通用“问一个 AI”的子生成器：Future 轮询 + 多次 yield。
@@ -974,6 +1041,7 @@ class GameEngine:
         return response.get("speech", "")
 
     def _ask(self, seat: int, prompt: str, label: str, public: bool = False, response_kind: str = "speech", allowed_targets=None):
+        self._raise_human_explode_interrupt()
         self.current_speaker = seat
         self.public_speaker = seat if public else None
         self._skip_current = False
@@ -992,7 +1060,9 @@ class GameEngine:
             self._pending_human_context = action_context
             yield self._ev("human_input_required", f"等待真人玩家：{label}")
             while self._last_resp is None:
+                self._raise_human_explode_interrupt()
                 yield self._ev("human_waiting", f"等待真人玩家：{label}")
+            self._raise_human_explode_interrupt()
             resp = self._last_resp
             self._last_resp = None
             self.pending_human_action = None
@@ -1012,6 +1082,7 @@ class GameEngine:
             yield self._ev("turn", f"{seat}号正在思考…")
 
             while True:
+                self._raise_human_explode_interrupt(request_id)
                 if self._skip_current:
                     resp = self.manager.cancel_ai_response(request_id, "上帝跳过当前玩家")
                     break
@@ -1020,6 +1091,7 @@ class GameEngine:
                     break
                 yield self._ev("waiting", f"{seat}号正在思考…（可点击跳过当前玩家）")
 
+            self._raise_human_explode_interrupt(request_id)
             self._active_request_id = None
             self._skip_current = False
             self._last_resp = resp
@@ -1229,10 +1301,33 @@ class GameEngine:
                     target = self.night.get("guard_target")
                     self.human_private_messages.append(f"守卫行动已记录：{'守护' + str(target) + '号' if target else '本夜空守'}。")
                 elif kind == "antidote":
-                    self.human_private_messages.append("女巫解药选择已记录；请以当前技能状态为准。")
+                    target = self.night.get("witch_save")
+                    self.human_private_messages.append(
+                        f"女巫解药结果：已救回{target}号。" if target
+                        else "女巫解药结果：本夜未使用解药。"
+                    )
                 elif kind == "poison":
                     target = self.night.get("witch_poison")
-                    self.human_private_messages.append(f"女巫毒药选择已记录：{'毒杀' + str(target) + '号' if target else '本夜不使用毒药'}。")
+                    self.human_private_messages.append(f"女巫毒药结果：{'毒杀' + str(target) + '号' if target else '本夜未使用毒药'}。")
+                elif kind == "charm":
+                    target = getattr(role, "charm_target", None)
+                    self.human_private_messages.append(f"狼美人魅惑结果：{'魅惑' + str(target) + '号' if target else '本夜未选定目标'}。")
+                elif kind == "dream":
+                    target = self.night.get("dream_target")
+                    self.human_private_messages.append(f"摄梦结果：{'梦游者为' + str(target) + '号' if target else '本夜未选定目标'}。")
+                elif kind == "ack":
+                    seat = self.last_exiled_seat
+                    camp = self.last_exiled_camp
+                    self.human_private_messages.append(
+                        f"守墓人验墓结果：昨日被放逐的{seat}号是{camp}。" if seat is not None and camp
+                        else "守墓人验墓结果：当前没有可确认的昨日放逐信息。"
+                    )
+                elif kind == "swap":
+                    pair = self.night.get("magician_swap")
+                    self.human_private_messages.append(
+                        f"魔术师交换结果：{pair[0]}号与{pair[1]}号的号码牌已交换。" if pair
+                        else "魔术师交换结果：本夜未执行有效交换。"
+                    )
 
     def _run_death_action(self, role):
         """临终技能事件回调(猎人开枪)：★V6.7+ 私下询问——【不再公开预告身份】(原"X号猎人倒下"会白送身份)，
@@ -1336,6 +1431,9 @@ class GameEngine:
         prompt = cupid.get_link_prompt(self)
         yield from self._ask(cupid.seat, prompt, "D0 丘比特连线", response_kind="link")   # public=False：连线静默进行
         cupid.parse_link_response(self, self._last_resp)            # 置 self.lovers + 私下告知双方 + 复盘
+        if cupid.seat == self.human_seat and self.lovers:
+            a, b = self.lovers
+            self.human_private_messages.append(f"丘比特连线结果：{a}号与{b}号已结为情侣。")
 
     def _run_wolf_pack_night(self, label):
         """狼队集体夜杀；白天自爆者可按本项目规则参加下一夜最后一次讨论与落刀。"""
@@ -1709,6 +1807,23 @@ class GameEngine:
     # ★ 警长竞选状态机（子生成器）
     # ========================================================
     def _run_election(self):
+        entry_resumed = (self.election_state == 2)
+        self._human_explode_window = "election"
+        try:
+            yield from self._run_election_impl()
+            self._raise_human_explode_interrupt()
+        except _HumanExplodeInterrupt:
+            target = self._human_explode_target
+            self._human_explode_requested = False
+            self._human_explode_target = 0
+            if self._day_interrupted or not self.players.get(self.human_seat, {}).get("alive", False):
+                return
+            self._last_resp = {"explode_target": target}
+            yield from self._handle_election_explode(self.human_seat, entry_resumed)
+        finally:
+            self._human_explode_window = None
+
+    def _run_election_impl(self):
         entry_resumed = (self.election_state == 2)   # 是否顺延后的复选
         self.election_state = 1
         if entry_resumed:
@@ -1725,6 +1840,7 @@ class GameEngine:
         for s in self.alive_seats():
             # public=False：报名静默进行，不在公屏逐个剧透（阴间仍可见其盘算）
             yield from self._ask(s, self._police_join_prompt(s), f"D{self.day} 上警报名", public=False, response_kind="join_police")
+            self._raise_human_explode_interrupt()
             if self._explode_requested(s):
                 yield from self._handle_election_explode(s, entry_resumed)
                 return
@@ -1748,6 +1864,7 @@ class GameEngine:
         pol_speeches = []
         for s in speak_order:
             yield from self._ask(s, self._police_speech_prompt(s, pol_speeches), f"D{self.day} 上警发言", public=True)
+            self._raise_human_explode_interrupt()
             if self._explode_requested(s):
                 self.election_speeches = pol_speeches   # 即便中断也把已有警上发言留给白天继承
                 yield from self._handle_election_explode(s, entry_resumed)
@@ -1761,6 +1878,7 @@ class GameEngine:
         withdrawers = []
         for s in speak_order:
             yield from self._ask(s, self._withdraw_prompt(s), f"D{self.day} 退水", public=False, response_kind="withdraw")
+            self._raise_human_explode_interrupt()
             if self._explode_requested(s):
                 yield from self._handle_election_explode(s, entry_resumed)
                 return
@@ -1794,6 +1912,8 @@ class GameEngine:
             self._broadcast_event(f"【警长诞生】{self.sheriff}号 成为警长（投票算1.5票）。")
             return
         self._log_judge(f"🗳️ 警下盲投：{'、'.join(f'{v}号' for v in voters)} 在 {'、'.join(f'{r}号' for r in remaining)} 中选警长。")
+        self._raise_human_explode_interrupt()
+        self._human_explode_window = None
         yield self._ev("police_vote", "警下盲投")
         votes, decision_sources = {}, {}
         for v in voters:
@@ -1844,6 +1964,7 @@ class GameEngine:
         pk_speeches = []
         for s in tied:
             yield from self._ask(s, self._police_pk_prompt(s, pk_speeches, tied), f"D{self.day} PK发言", public=True)
+            self._raise_human_explode_interrupt()
             if self._explode_requested(s):
                 yield from self._handle_election_explode(s, entry_resumed)
                 return None
@@ -1852,6 +1973,8 @@ class GameEngine:
         self.election_speeches = (self.election_speeches or []) + [(seat, f"【PK发言】{sp}") for seat, sp in pk_speeches]
         # PK 盲投（警下玩家在平票候选人里二选一）
         self._log_judge(f"🗳️ PK 盲投：{'、'.join(f'{v}号' for v in voters)} 在 {'、'.join(f'{c}号' for c in tied)} 中再选一次。")
+        self._raise_human_explode_interrupt()
+        self._human_explode_window = None
         yield self._ev("police_pk_vote", "PK盲投")
         pk_votes, decision_sources = {}, {}
         for v in voters:
@@ -2046,6 +2169,7 @@ class GameEngine:
             self._react_left -= 1
             yield from self._ask(w, self._react_explode_prompt(w, today_speeches),
                                  f"D{self.day} 抢爆判断", public=False, response_kind="react_explode")
+            self._raise_human_explode_interrupt()
             if self._explode_requested(w):
                 yield from self._handle_regular_explode(w)
                 return True
@@ -2063,6 +2187,22 @@ class GameEngine:
         return False
 
     def _run_day_discussion_and_vote(self, deaths, peace_first):
+        self._human_explode_window = "discussion"
+        try:
+            yield from self._run_day_discussion_and_vote_impl(deaths, peace_first)
+            self._raise_human_explode_interrupt()
+        except _HumanExplodeInterrupt:
+            target = self._human_explode_target
+            self._human_explode_requested = False
+            self._human_explode_target = 0
+            if self._day_interrupted or not self.players.get(self.human_seat, {}).get("alive", False):
+                return
+            self._last_resp = {"explode_target": target}
+            yield from self._handle_regular_explode(self.human_seat)
+        finally:
+            self._human_explode_window = None
+
+    def _run_day_discussion_and_vote_impl(self, deaths, peace_first):
         order, reason = yield from self._decide_speech_order(deaths)
         # 归票权：有警徽 → 警长归票带队；无警徽 → 末位发言者归票
         sheriff_alive = self.sheriff is not None and self.players[self.sheriff]["alive"]
@@ -2087,6 +2227,7 @@ class GameEngine:
             else:
                 yield from self._ask(s, self._day_speech_prompt(s, today_speeches, deaths, peace_first, order),
                                      f"D{self.day} 发言", public=True)
+            self._raise_human_explode_interrupt()
             today_speeches.append((s, self._last_resp["speech"]))   # 先记录发言(自爆/决斗也已发过言)
             if self._explode_requested(s):
                 yield from self._handle_regular_explode(s)
@@ -2109,6 +2250,7 @@ class GameEngine:
             sh = self.sheriff
             self._log_judge(f"🎖️ 由警长 {sh}号 归票带队。")
             yield from self._ask(sh, self._consolidation_prompt(sh, today_speeches, order), f"D{self.day} 警长归票", public=True, response_kind="consolidation")
+            self._raise_human_explode_interrupt()
             today_speeches.append((sh, self._last_resp["speech"]))
             if self._explode_requested(sh):
                 yield from self._handle_regular_explode(sh)
@@ -2127,6 +2269,8 @@ class GameEngine:
 
         # 放逐投票（警长票×1.5），完整票型公开 + 广播
         self._log_judge("🗳️ 进入【投票阶段】，全体同时暗投（警长票×1.5）。")
+        self._raise_human_explode_interrupt()
+        self._human_explode_window = None
         yield self._ev("vote_phase", "投票阶段")
         voters = [s for s in order if self.players[s]["alive"]]
         votes, decision_sources = {}, {}

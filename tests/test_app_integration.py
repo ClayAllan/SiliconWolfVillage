@@ -58,7 +58,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.app.text_input[0].set_value("test-key-never-sent").run()
         self.click("🎬 开始新游戏")
 
-    def install_pending_human_action(self, human_seat=1, wolf_talk=None):
+    def install_pending_human_action(self, human_seat=1, wolf_talk=None, response_kind="speech", wrap_day_stage=False):
         manager = MemoryOnlyManager()
         manager.has_pending = lambda: False
         manager.get_usage_snapshot = lambda: {"api_returns": 0, "unmetered_returns": 0, "unknown_requests": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "cache_hit_tokens": 0, "cache_miss_tokens": 0, "reasoning_tokens": 0, "summary_requests": 0, "summary_total_tokens": 0, "by_response_kind": {}}
@@ -74,12 +74,22 @@ class AppIntegrationTests(unittest.TestCase):
         if wolf_talk is not None:
             engine.current_wolf_talk = wolf_talk
         is_wolf = engine.roles[human_seat].camp == "狼人"
-        generator = engine._ask(
-            human_seat,
-            "测试用内部提示；不应替代真人输入。",
-            "D1 狼人讨论" if is_wolf else "D1 发言",
-            public=not is_wolf,
-        )
+        def pending_action():
+            yield from engine._ask(
+                human_seat,
+                "测试用内部提示；不应替代真人输入。",
+                "D1 狼人讨论" if is_wolf else "D1 发言",
+                public=not is_wolf,
+                response_kind=response_kind,
+            )
+
+        if wrap_day_stage:
+            engine.day = 2
+            engine.phase = "第2天"
+            engine._run_day_discussion_and_vote_impl = lambda deaths, peace_first: pending_action()
+            generator = engine._run_day_discussion_and_vote({}, False)
+        else:
+            generator = pending_action()
         service = GameService(
             engine, str(self.replays), automatic=False, generator=generator
         )
@@ -126,6 +136,73 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(engine.reasoning_log[human_seat][-1]["speech"], "这是由真人表单提交的发言。")
         self.assertEqual(engine.reasoning_log[human_seat][-1]["actor_source"], "human")
         self.assertIsNone(engine.pending_human_action)
+
+    def test_human_wolf_sees_explode_button_disabled_outside_day_window(self):
+        self.install_pending_human_action("wolf")
+        self.app.run()
+        self.assert_clean()
+        explode = next(button for button in self.app.button if button.label == "💥 自爆")
+        self.assertTrue(explode.disabled)
+
+    def test_human_wolf_can_use_persistent_explode_button_during_pending_turn(self):
+        engine, service, human_seat = self.install_pending_human_action(
+            "wolf", wrap_day_stage=True
+        )
+        self.app.run()
+        self.assert_clean()
+        explode = next(button for button in self.app.button if button.label == "💥 自爆")
+        self.assertFalse(explode.disabled)
+
+        explode.click().run()
+        self.assert_clean()
+        self.assertFalse(engine.players[human_seat]["alive"])
+        self.assertEqual(engine.pending_wolf_night_seats, [human_seat])
+        self.assertIsNone(engine.pending_human_action)
+
+    def _assert_human_private_skill_form(self, kind):
+        engine, service, human_seat = self.install_pending_human_action(
+            "good", response_kind=kind
+        )
+        self.app.run()
+        self.assert_clean()
+
+        if kind == "ack":
+            self.click("提交行动")
+            self.assertEqual(engine._last_resp["speech"], "已确认")
+        elif kind in {"charm", "dream"}:
+            label = "魅惑目标" if kind == "charm" else "摄梦目标"
+            target_box = next(item for item in self.app.selectbox if item.label == label)
+            target = int(str(target_box.options[0]).split()[0])
+            target_box.set_value(target).run()
+            self.click("提交行动")
+            self.assertEqual(engine._last_resp["vote_target"], target)
+        else:
+            first_box = next(item for item in self.app.selectbox if item.label == "第一位玩家")
+            first = int(str(first_box.options[0]).split()[0])
+            first_box.set_value(first).run()
+            second_box = next(item for item in self.app.selectbox if item.label == "第二位玩家")
+            second = int(str(second_box.options[0]).split()[0])
+            self.assertNotEqual(first, second)
+            second_box.set_value(second).run()
+            self.click("提交行动")
+            self.assertEqual(engine._last_resp["targets"], [first, second])
+
+        self.assert_clean()
+
+    def test_human_charm_private_skill_form(self):
+        self._assert_human_private_skill_form("charm")
+
+    def test_human_dream_private_skill_form(self):
+        self._assert_human_private_skill_form("dream")
+
+    def test_human_cupid_link_private_skill_form(self):
+        self._assert_human_private_skill_form("link")
+
+    def test_human_magician_swap_private_skill_form(self):
+        self._assert_human_private_skill_form("swap")
+
+    def test_human_gravekeeper_ack_form(self):
+        self._assert_human_private_skill_form("ack")
 
     def test_pending_human_form_blocks_resume_step_and_save_in_ui(self):
         engine, service, human_seat = self.install_pending_human_action("good")
@@ -443,7 +520,7 @@ class AppIntegrationTests(unittest.TestCase):
         )
         self.assertFalse(download.disabled)
         captions = [item.value for item in self.app.caption]
-        self.assertTrue(any("部署验收标记：SWV-20261030-IMMUTABLE-PROJECTION-V1" in value for value in captions))
+        self.assertTrue(any("部署验收标记：SWV-20261030-HUMAN-EXPLODE-PRIVATE-SKILLS-V1" in value for value in captions))
         self.assertTrue(any("ZIP 已在当前会话中准备并缓存" in value and "bytes" in value for value in captions))
         # Consent prepares the ZIP once. The ordinary download widget must
         # keep re-registering the same bytes across full-page auto-refresh reruns.

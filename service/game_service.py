@@ -188,6 +188,26 @@ class GameService:
                 self._advance_locked()
             return True
 
+    def request_human_explode(self, target=0):
+        """Accept a human self-explosion and resume the engine to its daytime boundary."""
+        with self._condition:
+            if self._closed or self._done:
+                raise RuntimeError("对局已结束，无法自爆")
+            self._engine.request_human_explode(target)
+            self.revision += 1
+            self._error = ""
+            self._waiting_since = 0.0
+            self._next_due = 0.0
+            if self._automatic:
+                # A pending human form is cleared by the engine; the worker can now
+                # resume and unwind whichever AI/human action is currently waiting.
+                self._running = True
+                self._ensure_worker_locked()
+            else:
+                self._advance_locked()
+            self._condition.notify_all()
+            return True
+
     def request_skip_current(self):
         with self._condition:
             if self._closed or self._done or not self._engine.request_skip_current():
