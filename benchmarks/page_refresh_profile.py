@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from benchmarks import snapshot_baseline as baseline
+from benchmarks.immutable_log_poc import freeze_engine_logs
 from service import game_service as service_module
 from service.game_service import GameService
 from service.live_feed import feed_identity, prepare_feed_state, select_feed_window
@@ -389,6 +390,134 @@ def profile_snapshot_fields(public_rows, repeats):
                 service.close()
 
 
+def _profile_view_and_feed(engine, human_seat, repeats):
+    projection_samples = []
+    feed_samples = []
+    final_view = None
+    final_feed = None
+    for _ in range(2):
+        project_view(engine, viewer_seat=human_seat)
+    for _ in range(repeats):
+        started = time.perf_counter_ns()
+        view = project_view(engine, viewer_seat=human_seat)
+        projection_samples.append((time.perf_counter_ns() - started) / 1_000_000)
+
+        state = {"feed_follow_latest": True, "_feed_seen_seq": 0}
+        started = time.perf_counter_ns()
+        feed = select_feed_window(
+            state,
+            view.public_log,
+            show_god=False,
+            channel="全部动态",
+            full_history=False,
+            limit=90,
+        )
+        feed_samples.append((time.perf_counter_ns() - started) / 1_000_000)
+        final_view, final_feed = view, feed
+    return _stats(projection_samples), _stats(feed_samples), final_view, final_feed
+
+
+def profile_immutable_log_snapshot(public_rows, repeats):
+    """Benchmark-only POC: recursively frozen log rows may be safely shared by snapshots."""
+    engine, human_seat = baseline.fixture(public_rows)
+    mark_human_rows(engine, human_seat)
+
+    with tempfile.TemporaryDirectory(prefix="swv-immutable-log-poc-") as directory:
+        service = GameService(engine, directory, automatic=False)
+        probe = SnapshotProbe(service, profile_fields=True)
+        try:
+            def collect_snapshot_samples():
+                for _ in range(2):
+                    snapshot, _ = probe.take()
+                    del snapshot
+                samples = []
+                for _ in range(repeats):
+                    snapshot, metrics = probe.take()
+                    del snapshot
+                    samples.append(metrics)
+                return samples
+
+            normal_samples = collect_snapshot_samples()
+            normal_snapshot, _ = probe.take()
+            normal_projection, normal_feed, normal_view, normal_feed_result = (
+                _profile_view_and_feed(normal_snapshot.engine, human_seat, repeats)
+            )
+            normal_export = json.dumps(
+                normal_snapshot.engine.export_state(),
+                ensure_ascii=False,
+                default=str,
+            )
+
+            # No worker is running. Replace only log rows; outer containers remain
+            # ordinary mutable list/dict objects so append semantics can be preserved.
+            freeze_engine_logs(service._engine)
+            frozen_samples = collect_snapshot_samples()
+            frozen_snapshot, _ = probe.take()
+            frozen_projection, frozen_feed, frozen_view, frozen_feed_result = (
+                _profile_view_and_feed(frozen_snapshot.engine, human_seat, repeats)
+            )
+            frozen_export = json.dumps(
+                frozen_snapshot.engine.export_state(),
+                ensure_ascii=False,
+                default=str,
+            )
+
+            first_reasoning_seat = next(
+                seat for seat, rows in service._engine.reasoning_log.items() if rows
+            )
+            view_parity = vars(normal_view) == vars(frozen_view)
+            feed_parity = normal_feed_result == frozen_feed_result
+            export_parity = json.loads(normal_export) == json.loads(frozen_export)
+            shared_public_row = (
+                bool(frozen_snapshot.engine.public_log)
+                and frozen_snapshot.engine.public_log[0] is service._engine.public_log[0]
+            )
+            shared_reasoning_row = (
+                frozen_snapshot.engine.reasoning_log[first_reasoning_seat][0]
+                is service._engine.reasoning_log[first_reasoning_seat][0]
+            )
+
+            def field_stat(samples, name):
+                return _stats([
+                    sample["deepcopy_fields_ms"].get(name, 0.0)
+                    for sample in samples
+                ])
+
+            return {
+                "public_rows": public_rows,
+                "reasoning_rows": sum(len(rows) for rows in engine.reasoning_log.values()),
+                "normal_snapshot_total": _stats([
+                    sample["total_ms"] for sample in normal_samples
+                ]),
+                "frozen_snapshot_total": _stats([
+                    sample["total_ms"] for sample in frozen_samples
+                ]),
+                "normal_snapshot_deepcopy": _stats([
+                    sample["deepcopy_ms"] for sample in normal_samples
+                ]),
+                "frozen_snapshot_deepcopy": _stats([
+                    sample["deepcopy_ms"] for sample in frozen_samples
+                ]),
+                "normal_public_log_copy": field_stat(normal_samples, "public_log"),
+                "frozen_public_log_copy": field_stat(frozen_samples, "public_log"),
+                "normal_reasoning_log_copy": field_stat(normal_samples, "reasoning_log"),
+                "frozen_reasoning_log_copy": field_stat(frozen_samples, "reasoning_log"),
+                "normal_projection": normal_projection,
+                "frozen_projection": frozen_projection,
+                "normal_feed_selection": normal_feed,
+                "frozen_feed_selection": frozen_feed,
+                "view_parity": view_parity,
+                "feed_parity": feed_parity,
+                "export_parity": export_parity,
+                "shared_public_row": shared_public_row,
+                "shared_reasoning_row": shared_reasoning_row,
+            }
+        finally:
+            probe.close()
+            with patch("service.game_service.archive_game", return_value=None):
+                service.close()
+
+
 def profile_case(public_rows, repeats, integrity_guard):
     engine, human_seat = baseline.fixture(public_rows)
     mark_human_rows(engine, human_seat)
@@ -624,6 +753,47 @@ def render_markdown(payload):
                 "",
             ])
 
+    immutable_profiles = payload.get("immutable_log_profiles", [])
+    if immutable_profiles:
+        lines.extend([
+            "",
+            "## Benchmark-only immutable log-row prototype",
+            "",
+            "The prototype recursively freezes JSON-like event rows while leaving outer log containers appendable. It is not used by production code. Snapshot deep copies can then reuse immutable row objects; view projection and feed selection are compared against ordinary mutable rows.",
+            "",
+            "| Events | Snapshot deepcopy normal / frozen P50 (ms) | public_log copy normal / frozen (ms) | reasoning_log copy normal / frozen (ms) | Projection normal / frozen (ms) | Feed normal / frozen (ms) |",
+            "|---:|---:|---:|---:|---:|---:|",
+        ])
+        for item in immutable_profiles:
+            lines.append(
+                f"| {item['public_rows']:,} "
+                f"| {item['normal_snapshot_deepcopy']['median_ms']:.2f} / {item['frozen_snapshot_deepcopy']['median_ms']:.2f} "
+                f"| {item['normal_public_log_copy']['median_ms']:.2f} / {item['frozen_public_log_copy']['median_ms']:.2f} "
+                f"| {item['normal_reasoning_log_copy']['median_ms']:.2f} / {item['frozen_reasoning_log_copy']['median_ms']:.2f} "
+                f"| {item['normal_projection']['median_ms']:.2f} / {item['frozen_projection']['median_ms']:.2f} "
+                f"| {item['normal_feed_selection']['median_ms']:.3f} / {item['frozen_feed_selection']['median_ms']:.3f} |"
+            )
+        lines.extend([
+            "",
+            "| Events | View parity | Feed parity | JSON export parity | Public row shared | Reasoning row shared |",
+            "|---:|:---:|:---:|:---:|:---:|:---:|",
+        ])
+        for item in immutable_profiles:
+            lines.append(
+                f"| {item['public_rows']:,} "
+                f"| {'PASS' if item['view_parity'] else 'FAIL'} "
+                f"| {'PASS' if item['feed_parity'] else 'FAIL'} "
+                f"| {'PASS' if item['export_parity'] else 'FAIL'} "
+                f"| {'YES' if item['shared_public_row'] else 'NO'} "
+                f"| {'YES' if item['shared_reasoning_row'] else 'NO'} |"
+            )
+        lines.extend([
+            "",
+            "- The prototype uses dict/list subclasses and returns self from deepcopy only after recursively freezing nested values.",
+            "- It is a compatibility/performance experiment, not a production immutability guarantee; append, load_state, serialization, and all engine write paths still require dedicated regression coverage before integration.",
+            "",
+        ])
+
     contention = payload["page_refresh_contention"]
     lines.extend([
         "",
@@ -699,6 +869,7 @@ def main():
         },
         "cases": [],
         "snapshot_field_profiles": [],
+        "immutable_log_profiles": [],
     }
 
     for size in sizes:
@@ -706,6 +877,16 @@ def main():
         payload["cases"].append(case)
         field_profile = profile_snapshot_fields(size, args.repeats)
         payload["snapshot_field_profiles"].append(field_profile)
+        immutable_profile = profile_immutable_log_snapshot(size, args.repeats)
+        payload["immutable_log_profiles"].append(immutable_profile)
+        print(
+            f"IMMUTABLE-LOG {size:6d} events: "
+            f"snapshot deepcopy {immutable_profile['normal_snapshot_deepcopy']['median_ms']:.3f} -> "
+            f"{immutable_profile['frozen_snapshot_deepcopy']['median_ms']:.3f}ms; "
+            f"view/feed/export parity={immutable_profile['view_parity']}/"
+            f"{immutable_profile['feed_parity']}/{immutable_profile['export_parity']}",
+            flush=True,
+        )
         top_fields = sorted(
             field_profile["fields"].items(),
             key=lambda item: item[1]["median_ms"],
