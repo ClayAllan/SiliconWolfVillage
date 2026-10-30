@@ -1,0 +1,50 @@
+name: Full app preview browser benchmark
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app.py"
+      - "ui/ui_preview.py"
+      - "ui/feed_ui.py"
+      - "tests/run_full_app_preview_browser_benchmark.py"
+      - ".github/workflows/full-app-preview-browser-benchmark.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-app-preview:
+    name: Full app zero-API preview in Chromium
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install project and browser dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt playwright
+          python -m playwright install --with-deps chromium
+      - name: Measure full app preview in Chromium
+        run: python tests/run_full_app_preview_browser_benchmark.py --repeats 3
+      - name: Publish full-app browser summary
+        if: always()
+        run: |
+          if [ -f benchmark-results/full-app-preview-browser.md ]; then
+            cat benchmark-results/full-app-preview-browser.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload inspectable full-app browser measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-app-preview-browser-${{ github.sha }}
+          path: benchmark-results/
+          if-no-files-found: warn
+          retention-days: 30
