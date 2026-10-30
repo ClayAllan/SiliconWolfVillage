@@ -5,8 +5,9 @@ Run:
     python benchmarks/page_refresh_profile.py --output-dir benchmark-results
 
 The harness uses the real GameService, the exact app.py human-action guard,
-project_view(), and select_feed_window(). It models the two snapshots on the
-normal active-game rerun path, but deliberately excludes Streamlit rendering,
+project_view(), and select_feed_window(). It models the current two-snapshot
+rerun and compares it with the removed three-snapshot path in the same process;
+it deliberately excludes Streamlit rendering,
 browser transport, and paid model requests.
 """
 from __future__ import annotations
@@ -201,7 +202,7 @@ def inspect_sync_call_sites():
     return sorted(all_calls), sorted(top_level_calls)
 
 
-def profile_page_refresh(service, probe, human_seat, integrity_guard, *, snapshot_count=2):
+def profile_page_refresh(service, probe, human_seat, integrity_guard, *, snapshot_count=NORMAL_ACTIVE_REFRESH_SNAPSHOT_CALLS):
     """Model the active rerun with two snapshots or its legacy three-snapshot control."""
     if snapshot_count not in (2, 3):
         raise ValueError("snapshot_count must be 2 (current) or 3 (legacy control)")
