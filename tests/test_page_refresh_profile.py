@@ -10,6 +10,7 @@ from benchmarks.page_refresh_profile import (
     load_integrity_guard,
     mark_human_rows,
     profile_page_refresh,
+    profile_snapshot_fields,
 )
 from service.game_service import GameService
 
@@ -26,6 +27,32 @@ class PageRefreshProfileTests(unittest.TestCase):
         row["response"].pop("_human_action", None)
         row["response"]["decision_source"] = "model"
         self.assertIn("安全保护", guard(engine))
+
+    def test_snapshot_probe_attributes_deepcopy_time_to_engine_fields(self):
+        engine, _human_seat = snapshot_baseline.fixture(120)
+
+        with tempfile.TemporaryDirectory(prefix="swv-field-profile-test-") as directory:
+            service = GameService(engine, directory, automatic=False)
+            probe = SnapshotProbe(service, profile_fields=True)
+            try:
+                snapshot, metrics = probe.take()
+                del snapshot
+            finally:
+                probe.close()
+                with patch("service.game_service.archive_game", return_value=None):
+                    service.close()
+
+        fields = metrics["deepcopy_fields_ms"]
+        self.assertIn("public_log", fields)
+        self.assertIn("reasoning_log", fields)
+        self.assertIn("players", fields)
+        self.assertIn("roles", fields)
+        self.assertGreater(fields["public_log"], 0)
+        self.assertGreater(fields["reasoning_log"], 0)
+        self.assertLessEqual(
+            sum(fields.values()), metrics["deepcopy_ms"] + 0.01,
+        )
+        self.assertEqual(metrics["deepcopy_calls"], len(fields) + 4)
 
     def test_normal_active_rerun_uses_two_direct_syncs_and_no_sidebar_resync(self):
         app_path = snapshot_baseline.ROOT / "app.py"
