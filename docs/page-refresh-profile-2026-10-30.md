@@ -305,7 +305,7 @@ P2-C 与 P2-D 是不同 GitHub Actions 运行，绝对毫秒值受共享 runner 
 
 ### 状态说明
 
-- `app.py` 构建标记与 main 分支部署 Smoke 的预期标记均更新为 `SWV-20261030-IMMUTABLE-LOG-V1`。
+- PR #34 合并时，`app.py` 构建标记与 main 分支部署 Smoke 的预期标记均为 `SWV-20261030-IMMUTABLE-LOG-V1`；随后 P2-E 分支将两者更新为 `SWV-20261030-IMMUTABLE-PROJECTION-V1`，待 PR #35 合并后由新的 main 部署 Smoke 验收。
 - PR #34 已合并至 `main`，提交 `3c48b6d007fe11f9162f0c5e33c2a768e51af3cc`；main 分支 242 项测试通过。
 - [Streamlit 部署 Smoke](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41015622790) 已在真实页面中找到新标记，HTTP 200。P2-D 已确认部署生效。
 
