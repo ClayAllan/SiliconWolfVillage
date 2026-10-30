@@ -188,4 +188,4 @@ app.py 中 sync_game_state() 的全部调用点：
 - Chromium：连续两次真实 ZIP 下载通过，ZIP 完整性检查通过。
 - 配对页面刷新基准通过；原始 Artifact 已归档。
 - 构建标记更新为 `SWV-20261030-REFRESH-2SNAP-V1`；PR 合并后仍须由 main 分支部署 Smoke 在真实 Streamlit 页面中找到该标记，才能确认线上已部署。
-- PR #32 尚待最终合并；本节记录的是 PR 分支代码与测试证据，不提前声称已进入 main 或已在线上生效。
+- 本节只证明 PR 分支的代码与离线测试/基准结果；是否已进入 main、是否已在线上生效，必须分别以 PR 合并状态和 main 分支部署 Smoke 为准。
