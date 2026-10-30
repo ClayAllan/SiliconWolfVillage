@@ -6,9 +6,16 @@ on:
       - perf/snapshot-baseline
       - perf/snapshot-baseline-seat-balance
       - fix/live-feed-window-exit
+      - perf/page-refresh-diagnostics
     paths:
       - benchmarks/snapshot_baseline.py
+      - benchmarks/page_refresh_profile.py
+      - benchmarks/__init__.py
+      - app.py
+      - service/game_service.py
+      - service/view_projection.py
       - service/live_feed.py
+      - docs/page-refresh-profile-2026-10-30.md
       - .github/workflows/snapshot-benchmark.yml
   workflow_dispatch:
 
@@ -35,17 +42,23 @@ jobs:
       - name: Measure snapshot, projection, feed and worker contention
         run: |
           python benchmarks/snapshot_baseline.py --sizes 100,1000,5000,15000 --repeats 9 --stress-seconds 1.5 --poll-interval 0.05
+      - name: Measure normal page refresh and snapshot lock costs
+        run: |
+          python benchmarks/page_refresh_profile.py --sizes 100,1000,5000,15000 --repeats 9 --contention-seconds 4.6 --poll-interval 1.5
       - name: Publish human-readable summary
         if: always()
         run: |
           if [ -f benchmark-results/snapshot-baseline.md ]; then
             cat benchmark-results/snapshot-baseline.md >> "$GITHUB_STEP_SUMMARY"
           fi
+          if [ -f benchmark-results/page-refresh-profile.md ]; then
+            cat benchmark-results/page-refresh-profile.md >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Upload inspectable baseline
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: snapshot-baseline-${{ github.sha }}
+          name: snapshot-page-refresh-${{ github.sha }}
           path: benchmark-results/
           if-no-files-found: warn
           retention-days: 30
