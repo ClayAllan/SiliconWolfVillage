@@ -98,7 +98,11 @@ def select_feed_window(state, rows, *, show_god, channel, full_history, limit=90
             truncated = True
         if not follow and not mark_seen and seq > seen_before:
             unseen += 1
-        if len(selected_reversed) > cap and (follow or mark_seen or seq <= seen_before):
+        # Stop only after observing an additional matching row beyond the
+        # visible window. While paused, keep counting unseen rows until the
+        # previous seen cursor is reached; with no cursor, exact unread counts
+        # necessarily require scanning the remaining matching history.
+        if truncated and (follow or mark_seen or seq <= seen_before):
             break
 
     visible = list(reversed(selected_reversed[:cap]))
