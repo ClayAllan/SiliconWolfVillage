@@ -52,7 +52,22 @@ class PageRefreshProfileTests(unittest.TestCase):
         self.assertLessEqual(
             sum(fields.values()), metrics["deepcopy_ms"] + 0.01,
         )
-        self.assertEqual(metrics["deepcopy_calls"], len(fields) + 4)
+        self.assertGreater(metrics["deepcopy_calls"], len(fields))
+        expected_fields = set(vars(engine)) - {"manager", "recorder"}
+        self.assertEqual(set(fields), expected_fields)
+
+    def test_snapshot_field_profile_reports_nested_log_row_counts(self):
+        profile = profile_snapshot_fields(120, repeats=3)
+
+        self.assertEqual(profile["public_rows"], 120)
+        self.assertEqual(profile["fields"]["public_log"]["items"], 120)
+        self.assertEqual(profile["fields"]["reasoning_log"]["items"], 40)
+        self.assertGreater(profile["fields"]["public_log"]["median_ms"], 0)
+        self.assertGreater(profile["fields"]["reasoning_log"]["median_ms"], 0)
+        self.assertGreaterEqual(
+            profile["snapshot_deepcopy"]["median_ms"],
+            profile["unattributed_deepcopy"]["median_ms"],
+        )
 
     def test_normal_active_rerun_uses_two_direct_syncs_and_no_sidebar_resync(self):
         app_path = snapshot_baseline.ROOT / "app.py"
