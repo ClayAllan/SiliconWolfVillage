@@ -34,6 +34,7 @@ from engine.game_engine import GameEngine
 from service.game_service import GameService
 from service.live_feed import select_feed_window
 from service.view_projection import project_view
+from storage.immutable_log import freeze_log_row
 
 
 BASE_TEXT = "第2天公开局势讨论：发言者分别辨析警徽流向、反向金水、票型和夜间信息。" * 4
@@ -105,6 +106,13 @@ def fixture(history_rows: int) -> tuple[GameEngine, int]:
                              "decision_source": "model", "vote_target": 0},
             })
             reasoning_index += 1
+
+    # Match production engine writes: freeze event payloads, not outer appendable logs.
+    engine.public_log = [freeze_log_row(row) for row in engine.public_log]
+    engine.reasoning_log = {
+        seat: [freeze_log_row(row) for row in rows]
+        for seat, rows in engine.reasoning_log.items()
+    }
 
     reasoning_counts = [len(engine.reasoning_log[s]) for s in range(1, 13)]
     if reasoning_counts and max(reasoning_counts) - min(reasoning_counts) > 1:
