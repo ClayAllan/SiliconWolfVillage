@@ -1,5 +1,6 @@
 """实时动态的数据边界与滚动状态；不推进对局，也不调用模型。"""
 import hashlib
+from copy import deepcopy
 
 from storage.immutable_log import FrozenDict
 
