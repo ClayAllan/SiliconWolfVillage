@@ -105,8 +105,11 @@ def run_case(browser, event_count: int, mode: str, repeat: int) -> dict:
         page.evaluate(
             "() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
         )
-        time.sleep(0.2)
         browser_ready_ms = (time.perf_counter() - started) * 1000.0
+
+        # Keep this settling interval outside the readiness measurement. It is
+        # only used to collect late WebSocket frames and browser heap metrics.
+        time.sleep(0.2)
 
         metrics = json.loads(page.locator(METRICS_SELECTOR).inner_text())
         browser_metrics = page.evaluate(
@@ -231,8 +234,8 @@ def render_markdown(payload: dict) -> str:
         "## Interpretation boundaries",
         "",
         "- Python render time measures the fixture's render_feed call, including production event HTML generation and Streamlit element construction; it excludes later browser work.",
-        "- Browser ready time measures navigation start until the expected event DOM is present and two animation frames have elapsed, followed by a 200 ms settle interval. Event-count fixtures are cached and warmed before measurements, so the timed samples do not rebuild the synthetic history.",
-        "- Fixture build time is measured during cache population and reported separately; fixture access time is also retained in the JSON samples.",
+        "- Browser ready time measures navigation start until the expected event DOM is present and two animation frames have elapsed. The separate 200 ms settling interval used for transport and heap sampling is excluded from this timing.",
+        "- Event-count fixtures are cached and warmed before measured samples, so timed samples do not rebuild the synthetic history. Fixture build time is reported separately; fixture access time is retained in JSON.",
         "- WebSocket byte counts include all frames observed for that fixture session, not only the feed delta. They are a session-level transport indicator, not an exact serialized feed payload size.",
         "- DOM counts and HTML bytes are scoped to the keyed feed container, not the entire application.",
         "- The fixture excludes the rest of app.py, model inference, external API latency, production network RTT, multi-viewer contention and long-lived memory retention.",
