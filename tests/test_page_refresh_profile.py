@@ -71,6 +71,28 @@ class PageRefreshProfileTests(unittest.TestCase):
         )
         self.assertFalse(any(is_sync_call(node) for node in ast.walk(configure_block)))
 
+    def test_main_view_snapshot_captures_sidebar_react_budget_update(self):
+        engine, _human_seat = snapshot_baseline.fixture(120)
+        engine.react_budget = 1
+
+        with tempfile.TemporaryDirectory(prefix="swv-react-budget-snapshot-") as directory:
+            service = GameService(engine, directory, automatic=False)
+            probe = SnapshotProbe(service)
+            try:
+                sidebar_snapshot, _ = probe.take()
+                service.configure(
+                    automatic=True, delay=0.6, turbo=False, react_budget=7,
+                )
+                main_view_snapshot, _ = probe.take()
+            finally:
+                probe.close()
+                with patch("service.game_service.archive_game", return_value=None):
+                    service.close()
+
+        self.assertEqual(sidebar_snapshot.engine.react_budget, 1)
+        self.assertEqual(engine.react_budget, 7)
+        self.assertEqual(main_view_snapshot.engine.react_budget, 7)
+
     def test_page_refresh_profiles_two_isolated_snapshots(self):
         engine, human_seat = snapshot_baseline.fixture(120)
         mark_human_rows(engine, human_seat)
