@@ -9,9 +9,11 @@ on:
       - perf/page-refresh-diagnostics
       - perf/reduce-active-refresh-snapshots
       - perf/snapshot-field-cost-profile
+      - perf/immutable-log-snapshot-poc
     paths:
       - benchmarks/snapshot_baseline.py
       - benchmarks/page_refresh_profile.py
+      - benchmarks/immutable_log_poc.py
       - benchmarks/__init__.py
       - app.py
       - service/game_service.py
