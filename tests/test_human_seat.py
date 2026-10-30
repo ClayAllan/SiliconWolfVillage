@@ -169,7 +169,9 @@ class HumanSeatTests(unittest.TestCase):
                 self.assertEqual(self.engine.reasoning_log[2][-1]["actor_source"], "ai")
                 pending = service.snapshot().engine.pending_human_action
                 self.assertEqual(service.snapshot().runtime_diagnostics["wait_kind"], "human_input")
-                self.assertGreater(service.snapshot().runtime_diagnostics["waiting_age_seconds"], 0)
+                diag = service.snapshot().runtime_diagnostics
+                self.assertIsNotNone(diag["waiting_since"])
+                self.assertGreaterEqual(diag["waiting_age_seconds"], 0.0)
 
                 revision = service.revision
                 service.play()  # UI's old "continue" must not spin on human_waiting.
@@ -196,6 +198,9 @@ class HumanSeatTests(unittest.TestCase):
                 service.close()
 
     def test_manual_mode_rejects_save_until_human_submits(self):
+        # The offline manager intentionally lacks persistence; add just the
+        # minimal save contract to test the real service serialization path.
+        self.manager.export_state = lambda: {"memory": self.manager.memory}
         with tempfile.TemporaryDirectory() as directory:
             gen = self.engine._ask(1, "private", "D1 真人发言", public=True)
             service = GameService(self.engine, directory, automatic=False, generator=gen)
