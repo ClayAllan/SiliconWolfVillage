@@ -213,7 +213,8 @@ def profile_page_refresh(service, probe, human_seat, integrity_guard):
         raise AssertionError(f"synthetic human guard failed on first sync: {guard_error}")
 
     configure_started = time.perf_counter_ns()
-    service.configure(automatic=True, delay=0.6, turbo=False,\n                      react_budget=getattr(snapshot_1.engine, "react_budget", None))
+    service.configure(automatic=True, delay=0.6, turbo=False,
+                      react_budget=getattr(snapshot_1.engine, "react_budget", None))
     configure_ms = (time.perf_counter_ns() - configure_started) / 1_000_000
 
     snapshot_2, metrics_2 = probe.take()
