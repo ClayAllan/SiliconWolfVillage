@@ -209,26 +209,29 @@ def profile_page_refresh(service, probe, human_seat, integrity_guard, *, snapsho
     refresh_started = time.perf_counter_ns()
 
     snapshot_1, metrics_1 = probe.take()
+    initial_engine = snapshot_1.engine
+    del snapshot_1  # app.py retains the projected engine, not the GameSnapshot wrapper.
     guard_started = time.perf_counter_ns()
-    guard_error = integrity_guard(snapshot_1.engine)
+    guard_error = integrity_guard(initial_engine)
     guard_1_ms = (time.perf_counter_ns() - guard_started) / 1_000_000
     if guard_error:
         raise AssertionError(f"synthetic human guard failed on first sync: {guard_error}")
 
     configure_started = time.perf_counter_ns()
     service.configure(automatic=True, delay=0.6, turbo=False,
-                      react_budget=getattr(snapshot_1.engine, "react_budget", None))
+                      react_budget=getattr(initial_engine, "react_budget", None))
     configure_ms = (time.perf_counter_ns() - configure_started) / 1_000_000
 
     legacy_sidebar_metrics = []
     legacy_sidebar_guard_ms = []
     if snapshot_count == 3:
-        # Keep snapshot_1 alive: app.py's live_for_mode local still references
-        # the initial engine after the legacy sidebar sync replaces engine/ss.engine.
-        # Reproduce the removed post-configure sidebar sync as a same-run control.
+        # live_for_mode still retains initial_engine after engine/ss.engine are
+        # replaced by this legacy sidebar sync, matching the old app's lifetime.
         sidebar_snapshot, sidebar_metrics = probe.take()
+        sidebar_engine = sidebar_snapshot.engine
+        del sidebar_snapshot
         guard_started = time.perf_counter_ns()
-        guard_error = integrity_guard(sidebar_snapshot.engine)
+        guard_error = integrity_guard(sidebar_engine)
         legacy_guard_ms = (time.perf_counter_ns() - guard_started) / 1_000_000
         if guard_error:
             raise AssertionError(f"synthetic human guard failed after legacy sidebar sync: {guard_error}")
@@ -237,14 +240,16 @@ def profile_page_refresh(service, probe, human_seat, integrity_guard, *, snapsho
 
     # The main-view sync occurs after sidebar actions in both variants.
     main_snapshot, main_metrics = probe.take()
+    main_engine = main_snapshot.engine
+    del main_snapshot
     guard_started = time.perf_counter_ns()
-    guard_error = integrity_guard(main_snapshot.engine)
+    guard_error = integrity_guard(main_engine)
     main_guard_ms = (time.perf_counter_ns() - guard_started) / 1_000_000
     if guard_error:
         raise AssertionError(f"synthetic human guard failed before main view: {guard_error}")
 
     projection_started = time.perf_counter_ns()
-    view = project_view(main_snapshot.engine, viewer_seat=human_seat)
+    view = project_view(main_engine, viewer_seat=human_seat)
     projection_ms = (time.perf_counter_ns() - projection_started) / 1_000_000
 
     feed_started = time.perf_counter_ns()
