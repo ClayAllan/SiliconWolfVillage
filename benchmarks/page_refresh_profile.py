@@ -223,6 +223,9 @@ def profile_page_refresh(service, probe, human_seat, integrity_guard, *, snapsho
     legacy_sidebar_metrics = []
     legacy_sidebar_guard_ms = []
     if snapshot_count == 3:
+        # The old app assigned the sidebar sync back to `engine` / ss.engine,
+        # releasing the initial snapshot before taking the extra copy.
+        del snapshot_1
         # Reproduce the removed post-configure sidebar sync as a same-run control.
         sidebar_snapshot, sidebar_metrics = probe.take()
         guard_started = time.perf_counter_ns()
