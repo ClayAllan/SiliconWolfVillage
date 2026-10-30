@@ -66,7 +66,7 @@ class OfflineManager:
 
 
 def fixture(history_rows: int) -> tuple[GameEngine, int]:
-    """Fixed content distribution: N public events and N//3 reasoning records."""
+    """Fixed workload: N public events and one reasoning record per third event."""
     engine = GameEngine(OfflineManager())
     engine.random_seed = 20261030
     engine.rng = random.Random(engine.random_seed)
@@ -80,6 +80,7 @@ def fixture(history_rows: int) -> tuple[GameEngine, int]:
     engine.public_log = []
     engine.reasoning_log = {s: [] for s in range(1, 13)}
     kinds = ("judge", "player", "god", "player")
+    reasoning_index = 0
     for index in range(history_rows):
         seat = index % 12 + 1
         engine.public_log.append({
@@ -92,7 +93,10 @@ def fixture(history_rows: int) -> tuple[GameEngine, int]:
             "text": f"[{index:05d}] {BASE_TEXT}",
         })
         if index % 3 == 0:
-            engine.reasoning_log[seat].append({
+            # Public-event seats and reasoning authors are independent workload
+            # dimensions: rotate reasoning records across all twelve seats.
+            reasoning_seat = reasoning_index % 12 + 1
+            engine.reasoning_log[reasoning_seat].append({
                 "label": f"D{engine.day} 思考",
                 "reasoning": f"[{index:05d}] {REASONING_TEXT}",
                 "speech": BASE_TEXT,
@@ -100,6 +104,11 @@ def fixture(history_rows: int) -> tuple[GameEngine, int]:
                 "response": {"reasoning": REASONING_TEXT, "speech": BASE_TEXT,
                              "decision_source": "model", "vote_target": 0},
             })
+            reasoning_index += 1
+
+    reasoning_counts = [len(engine.reasoning_log[s]) for s in range(1, 13)]
+    if reasoning_counts and max(reasoning_counts) - min(reasoning_counts) > 1:
+        raise AssertionError("Synthetic reasoning records are not balanced across twelve seats")
     return engine, good_seat
 
 
