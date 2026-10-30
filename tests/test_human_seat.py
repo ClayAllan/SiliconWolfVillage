@@ -2,6 +2,7 @@
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from engine import config
@@ -173,6 +174,16 @@ class HumanSeatTests(unittest.TestCase):
                 self.assertIsNotNone(diag["waiting_since"])
                 self.assertGreaterEqual(diag["waiting_age_seconds"], 0.0)
 
+                # The reported age is rounded to one decimal place. Advance the
+                # service clock deterministically so the test proves it grows,
+                # rather than merely accepting any non-negative initial value.
+                waiting_since = diag["waiting_since"]
+                with patch("service.game_service.time.time",
+                           return_value=waiting_since + 1.26):
+                    advanced_age = service.snapshot().runtime_diagnostics["waiting_age_seconds"]
+                self.assertEqual(advanced_age, 1.3)
+                self.assertGreater(advanced_age, diag["waiting_age_seconds"])
+
                 revision = service.revision
                 service.play()  # UI's old "continue" must not spin on human_waiting.
                 self.assertFalse(service.step())
@@ -194,6 +205,9 @@ class HumanSeatTests(unittest.TestCase):
                                  "我是本局真人，明确提交发言。")
                 self.assertEqual([seat for seat, *_ in self.manager.submitted], [2])
                 self.assertIsNone(self.engine.pending_human_action)
+                terminal_diag = service.snapshot().runtime_diagnostics
+                self.assertIsNone(terminal_diag["waiting_since"])
+                self.assertIsNone(terminal_diag["waiting_age_seconds"])
             finally:
                 service.close()
 
