@@ -255,19 +255,31 @@ def _human_action_integrity_error(engine):
     return ""
 
 
-def sync_game_state():
+def sync_game_state(*, runtime_only=False):
     """只在 Streamlit 线程写会话状态，后台只操作 GameService。"""
     ss = st.session_state
     if ss.game_service is not None:
-        # 已打开对局可能仍持有热更新前的服务实例；使用当前快照协议读取，不重启生成器。
-        snapshot = GameService.snapshot(ss.game_service)
-        ss.engine = snapshot.engine
+        if runtime_only and ss.engine is not None:
+            # 真人单一视角的侧边栏只需要最新运行态；保留本次 rerun 已复制的引擎快照。
+            # 完整性检查在服务锁内针对实时引擎执行，避免检查过期的会话副本。
+            snapshot = GameService.runtime_snapshot(ss.game_service)
+            ss.engine.manager = snapshot.manager
+            ss.engine.react_budget = snapshot.react_budget
+            ss.engine._active_request_id = snapshot.active_request_id
+            ss.engine.pending_human_action = snapshot.pending_human_action
+            ss.engine.replay_logs = snapshot.replay_logs
+            integrity_error = snapshot.human_action_integrity_error
+        else:
+            # 首次同步、主视图同步和全知视角仍使用隔离的完整引擎快照。
+            snapshot = GameService.snapshot(ss.game_service)
+            ss.engine = snapshot.engine
+            integrity_error = _human_action_integrity_error(ss.engine)
+
         for field in ("running", "done", "status", "error", "last_event_type",
                       "last_archive", "archive_error"):
             ss[field] = getattr(snapshot, field)
         ss.advancing_since = snapshot.waiting_since
         ss.runtime_diagnostics = getattr(snapshot, "runtime_diagnostics", {})
-        integrity_error = _human_action_integrity_error(ss.engine)
         if integrity_error:
             # 即使后台服务来自热更新前的旧代码，也在页面层立即暂停并报告真人席位被代打。
             if snapshot.running:
@@ -512,7 +524,7 @@ with st.sidebar:
 
     if ss.game_service is not None:
         ss.game_service.configure(automatic=auto, delay=delay, turbo=is_turbo, react_budget=react_budget)
-        engine = sync_game_state()
+        engine = sync_game_state(runtime_only=single_view)
     auto_running = bool(auto and ss.running and not ss.done)
     model_settings = dict(api_key=api_key, base_url=base_url, good_model=good_model,
                           wolf_model=wolf_model, temperature=temperature, agent_timeout=agent_timeout,
