@@ -8,6 +8,7 @@ on:
       - fix/live-feed-window-exit
       - perf/page-refresh-diagnostics
       - perf/reduce-active-refresh-snapshots
+      - perf/snapshot-field-cost-profile
     paths:
       - benchmarks/snapshot_baseline.py
       - benchmarks/page_refresh_profile.py
