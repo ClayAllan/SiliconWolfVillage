@@ -262,9 +262,9 @@ PR #33 只增加离线测量、测试和文档，不修改生产快照、日志�
 - Python 3.11 / 3.12：各 **242 项离线回归测试通过**，Wheel 构建通过。
 - Chromium：ZIP 下载集成测试通过。
 - 新增测试覆盖嵌套 dict/list 冻结、修改与重新初始化保护、原始对象与冻结副本隔离、不可支持数据回退、引擎追加、快照共享边界、读档后重新冻结、JSON 序列化及事件序号连续性。
-- 测试运行：[GitHub Actions](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41014496732)。
+- 测试运行：[GitHub Actions](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41014931587)。
 - 被测提交：`34a1077bbb30374f80553d7ad6e4cb208dd577a5`。
-- 性能运行：[GitHub Actions](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41014496820)；[原始测量 Artifact](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41014496820/artifacts/12958658849)。
+- 性能运行：[GitHub Actions](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41014931583)；[原始测量 Artifact](https://github.com/ClayAllan/SiliconWolfVillage/actions/runs/41014931583/artifacts/12959141586)。
 - Python 3.11.17，GitHub 托管 Ubuntu，4 个逻辑 CPU；100 / 1,000 / 5,000 / 15,000 条合成公开事件，每约3条公开事件对应1条推理记录，覆盖12席；离线 manager，无付费模型调用。
 
 ### 生产实现的性能结果
@@ -273,11 +273,11 @@ PR #33 只增加离线测量、测试和文档，不修改生产快照、日志�
 
 | 指标 | P2-C 普通可变日志 | P2-D 不可变日志 | 变化 |
 |---|---:|---:|---:|
-| Snapshot deepcopy P50 | 69.53 ms | 6.37 ms | 下降约90.8% |
-| public_log deepcopy P50 | 47.01 ms | 4.61 ms | 下降约90.2% |
-| reasoning_log deepcopy P50 | 21.83 ms | 1.44 ms | 下降约93.4% |
-| 快照锁持有 P50 | 约69.5 ms | 6.42 ms | 显著缩短 |
-| 快照锁等待 P50 | 约0.002 ms | 0.002 ms | 仍接近零 |
+| Snapshot deepcopy P50 | 69.53 ms | 8.01 ms | 下降约88.5% |
+| public_log deepcopy P50 | 47.01 ms | 5.81 ms | 下降约87.6% |
+| reasoning_log deepcopy P50 | 21.83 ms | 1.83 ms | 下降约91.6% |
+| 快照锁持有 P50 | 约69.5 ms | 8.05 ms | 显著缩短 |
+| 快照锁等待 P50 | 约0.002 ms | 0.001 ms | 仍接近零 |
 
 P2-C 与 P2-D 是不同 GitHub Actions 运行，绝对毫秒值受共享 runner 影响；应以字段成本下降幅度、规模趋势和本次配对对照为主，不将其解释为线上固定延迟承诺。
 
@@ -285,21 +285,21 @@ P2-C 与 P2-D 是不同 GitHub Actions 运行，绝对毫秒值受共享 runner 
 
 | 公开事件 | 当前两快照 P50 / P95 | 旧三快照 P50 / P95 | 配对节省 P50 |
 |---:|---:|---:|---:|
-| 100 | 1.05 / 1.07 ms | 1.42 / 1.48 ms | 25.9% |
-| 1,000 | 4.04 / 4.16 ms | 4.83 / 9.00 ms | 16.7% |
-| 5,000 | 18.05 / 24.54 ms | 20.22 / 20.91 ms | 11.1% |
-| 15,000 | 55.94 / 72.03 ms | 62.17 / 72.14 ms | 11.1% |
+| 100 | 1.38 / 1.42 ms | 1.87 / 2.23 ms | 25.8% |
+| 1,000 | 5.05 / 5.10 ms | 6.00 / 10.93 ms | 16.0% |
+| 5,000 | 21.20 / 25.89 ms | 23.91 / 24.27 ms | 11.4% |
+| 15,000 | 62.25 / 71.54 ms | 70.33 / 79.14 ms | 11.0% |
 
-15,000 条事件下，页面数据链路中的单次快照锁等待 P50 为0.002ms、锁持有 P50 为6.42ms、deepcopy P50 为6.31ms。每1.5秒刷新一次的后台竞争测试中，Worker 吞吐保持率为99.7%，但该轮只有3次刷新；高频50ms轮询压力测试下保持率为92.6%（30次轮询）。这些数据只代表离线合成调度场景。
+15,000 条事件下，页面数据链路中的单次快照锁等待 P50 为0.001ms、锁持有 P50 为8.05ms、deepcopy P50 为7.97ms。每1.5秒刷新一次的页面竞争测试中，Worker 吞吐保持率为96.5%（4次刷新）；独立50ms高频快照压力测试下保持率为91.9%（30次轮询）。这些数据只代表离线合成调度场景。
 
 ### 下一阶段的瓶颈转移
 
 快照深拷贝已不再是主要瓶颈。15,000条事件时：
 
-- 全知视角投影 P50：69.73ms。
-- 单一真人视角投影 P50：42.57ms。
-- 完整数据链路 P50：全知77.35ms、真人48.53ms。
-- 有界 Feed 选择 P50：约0.018ms。
+- 全知视角投影 P50：73.42ms。
+- 单一真人视角投影 P50：45.42ms。
+- 完整数据链路 P50：全知82.36ms、真人54.07ms。
+- 有界 Feed 选择 P50：约0.025ms。
 
 **P2-E 应转向审查并优化 `project_view()` / `project_events()` 的全历史遍历与重复行构造**，重点是保持单人视角的身份、推理和夜间行动隐私；完整历史、全知视角、存档导出与复盘仍需保留准确数据。不得为了降低 UI 成本而截断底层日志或把全知字段泄露给普通玩家。
 
