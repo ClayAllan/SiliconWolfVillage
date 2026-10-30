@@ -17,10 +17,16 @@ import os
 from pathlib import Path
 import platform
 import statistics
+import sys
 import tempfile
 import time
 import tracemalloc
 from unittest.mock import patch
+
+# Invoked as "python benchmarks/snapshot_baseline.py" from the repository root.
+# Ensure project modules resolve independently of runner PYTHONPATH.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from engine import config
 from engine.game_engine import GameEngine
