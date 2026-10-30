@@ -346,6 +346,19 @@ def render_markdown(payload: dict) -> str:
         )
     lines.extend([
         "",
+        "## Normal-rate single-viewer sensitivity",
+        "",
+        "The high-frequency table above is a deliberately aggressive stress test. "
+        "The following case polls every 1.5 s to approximate one ordinary viewer:",
+        "",
+        f"- {payload['normal_rate_poll']['public_rows']:,} events: "
+        f"{payload['normal_rate_poll']['baseline_steps_per_second']:.1f} steps/s "
+        "without polling vs "
+        f"{payload['normal_rate_poll']['loaded_steps_per_second']:.1f} steps/s "
+        "with polling ("
+        f"{payload['normal_rate_poll']['relative_throughput_pct']:.1f}% relative; "
+        f"{payload['normal_rate_poll']['snapshots_during_loaded']} polls).",
+        "",
         "## Interpretation limitations",
         "",
         "- Timing is runner-specific and may vary because GitHub Actions uses shared runners. "
@@ -353,7 +366,8 @@ def render_markdown(payload: dict) -> str:
         "- Peak MiB is measured by Python tracemalloc for one call, not RSS or "
         "network payload. It excludes allocations by native extensions.",
         "- Progress throughput mixes CPU contention and serialization under the "
-        "shared condition; it is not a pure lock-wait measurement.",
+        "shared condition; it is not a pure lock-wait measurement. The 50 ms "
+        "polling rate is far above one UI refresh every 1.5 s.",
         "- Player view projection removes hidden data only after the service has "
         "copied the entire engine; the full pipeline intentionally measures that cost.",
         "- The test changes no production engine/service behavior.",
@@ -404,17 +418,29 @@ def main():
             f"run={time.monotonic()-start:.1f}s",
             flush=True,
         )
-    for size in [sizes[0], sizes[-1]]:
+    for size in sizes:
         contention = worker_contention(size, args.stress_seconds, args.poll_interval)
         payload["contention"].append(contention)
         print(
-            f"STRESS {size:6d} events: worker alone "
-            f"{contention['baseline_steps_per_second']:.2f} steps/s; "
+            f"STRESS {size:6d} events at {args.poll_interval*1000:.0f}ms polling: "
+            f"worker alone {contention['baseline_steps_per_second']:.2f} steps/s; "
             f"with polling {contention['loaded_steps_per_second']:.2f} steps/s; "
             f"relative throughput {contention['relative_throughput_pct']}%; "
             f"{contention['snapshots_during_loaded']} polls",
             flush=True,
         )
+    # The app normally requests page refreshes around 1.5 seconds apart.
+    # Contrast high-frequency stress with a normal-rate single-viewer case.
+    typical = worker_contention(sizes[-1], max(3.2, args.stress_seconds), 1.5)
+    payload["normal_rate_poll"] = typical
+    print(
+        f"NORMAL-POLL {sizes[-1]:6d} events at 1500ms polling: "
+        f"worker alone {typical['baseline_steps_per_second']:.2f} steps/s; "
+        f"with polling {typical['loaded_steps_per_second']:.2f} steps/s; "
+        f"relative throughput {typical['relative_throughput_pct']}%; "
+        f"{typical['snapshots_during_loaded']} polls",
+        flush=True,
+    )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     json_path = args.output_dir / "snapshot-baseline.json"
     markdown_path = args.output_dir / "snapshot-baseline.md"
