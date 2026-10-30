@@ -35,7 +35,7 @@ from service.view_projection import project_view
 
 
 APP_PATH = ROOT / "app.py"
-NORMAL_ACTIVE_REFRESH_SNAPSHOT_CALLS = 3
+NORMAL_ACTIVE_REFRESH_SNAPSHOT_CALLS = 2
 
 
 class _TimedCondition:
@@ -202,7 +202,7 @@ def inspect_sync_call_sites():
 
 
 def profile_page_refresh(service, probe, human_seat, integrity_guard):
-    """Model the ordinary active-game app.py path: sync, configure+sync, sync, project, feed."""
+    """Model the ordinary active-game app.py path: initial sync, configure, main-view sync, project, feed."""
     refresh_started = time.perf_counter_ns()
 
     snapshot_1, metrics_1 = probe.take()
@@ -217,22 +217,18 @@ def profile_page_refresh(service, probe, human_seat, integrity_guard):
                       react_budget=getattr(snapshot_1.engine, "react_budget", None))
     configure_ms = (time.perf_counter_ns() - configure_started) / 1_000_000
 
+    # The next sync is the main-view refresh after sidebar actions. The
+    # intermediate post-configure sync was removed from app.py because
+    # configure() does not mutate the copied sidebar read model.
     snapshot_2, metrics_2 = probe.take()
     guard_started = time.perf_counter_ns()
     guard_error = integrity_guard(snapshot_2.engine)
     guard_2_ms = (time.perf_counter_ns() - guard_started) / 1_000_000
     if guard_error:
-        raise AssertionError(f"synthetic human guard failed after configure: {guard_error}")
-
-    snapshot_3, metrics_3 = probe.take()
-    guard_started = time.perf_counter_ns()
-    guard_error = integrity_guard(snapshot_3.engine)
-    guard_3_ms = (time.perf_counter_ns() - guard_started) / 1_000_000
-    if guard_error:
         raise AssertionError(f"synthetic human guard failed before main view: {guard_error}")
 
     projection_started = time.perf_counter_ns()
-    view = project_view(snapshot_3.engine, viewer_seat=human_seat)
+    view = project_view(snapshot_2.engine, viewer_seat=human_seat)
     projection_ms = (time.perf_counter_ns() - projection_started) / 1_000_000
 
     feed_started = time.perf_counter_ns()
@@ -258,10 +254,10 @@ def profile_page_refresh(service, probe, human_seat, integrity_guard):
     return {
         "total_ms": (time.perf_counter_ns() - refresh_started) / 1_000_000,
         "configure_ms": configure_ms,
-        "integrity_guard_ms": [guard_1_ms, guard_2_ms, guard_3_ms],
+        "integrity_guard_ms": [guard_1_ms, guard_2_ms],
         "projection_ms": projection_ms,
         "feed_selection_ms": feed_ms,
-        "snapshots": [metrics_1, metrics_2, metrics_3],
+        "snapshots": [metrics_1, metrics_2],
         "visible_feed_rows": len(feed[0]),
         "unseen_rows": feed[1],
         "feed_truncated": feed[2],
@@ -322,7 +318,7 @@ def profile_case(public_rows, repeats, integrity_guard):
 
 
 def page_refresh_contention(public_rows, duration, poll_interval, integrity_guard):
-    """Compare worker throughput alone vs a real three-snapshot data refresh every 1.5 s."""
+    """Compare worker throughput alone vs a two-snapshot data refresh every 1.5 s."""
     engine, human_seat = baseline.fixture(public_rows)
     mark_human_rows(engine, human_seat)
     with tempfile.TemporaryDirectory(prefix="swv-page-refresh-contention-") as directory:
