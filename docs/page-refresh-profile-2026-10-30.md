@@ -350,6 +350,10 @@ P2-C 与 P2-D 是不同 GitHub Actions 运行，绝对毫秒值受共享 runner 
 
 页面刷新中的投影成本 P50 为7.65ms，Snapshot deepcopy 为7.51ms，Feed 选择为0.039ms。当前主要数据路径已显著缩短；这些测量仍不包含 Streamlit 组件渲染、WebSocket 传输和浏览器绘制。
 
+### 部署验收标记
+
+`app.py` 构建标记与 main 分支部署 Smoke 预期均已更新为 `SWV-20261030-IMMUTABLE-PROJECTION-V1`。PR 合并后，必须由 main 分支部署 Smoke 在真实 Streamlit 页面中找到该标记，才能确认 P2-E 已部署。
+
 ### 后续方向
 
 P2-D 与 P2-E 已分别压低快照复制和视角投影成本。下一步不应继续猜测瓶颈，而应增加真实页面侧测量：Streamlit 组件构建、动态 HTML 体积、WebSocket 传输、浏览器 DOM/绘制及不同历史长度下的内存占用。只有这些数据表明仍存在可复现瓶颈时，再决定是否优化 Feed 渲染或引入增量视图。
