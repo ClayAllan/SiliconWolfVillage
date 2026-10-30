@@ -201,8 +201,10 @@ def inspect_sync_call_sites():
     return sorted(all_calls), sorted(top_level_calls)
 
 
-def profile_page_refresh(service, probe, human_seat, integrity_guard):
-    """Model the ordinary active-game app.py path: initial sync, configure, main-view sync, project, feed."""
+def profile_page_refresh(service, probe, human_seat, integrity_guard, *, snapshot_count=2):
+    """Model the active rerun with two snapshots or its legacy three-snapshot control."""
+    if snapshot_count not in (2, 3):
+        raise ValueError("snapshot_count must be 2 (current) or 3 (legacy control)")
     refresh_started = time.perf_counter_ns()
 
     snapshot_1, metrics_1 = probe.take()
@@ -217,18 +219,29 @@ def profile_page_refresh(service, probe, human_seat, integrity_guard):
                       react_budget=getattr(snapshot_1.engine, "react_budget", None))
     configure_ms = (time.perf_counter_ns() - configure_started) / 1_000_000
 
-    # The next sync is the main-view refresh after sidebar actions. The
-    # intermediate post-configure sync was removed from app.py because
-    # configure() does not mutate the copied sidebar read model.
-    snapshot_2, metrics_2 = probe.take()
+    legacy_sidebar_metrics = []
+    legacy_sidebar_guard_ms = []
+    if snapshot_count == 3:
+        # Reproduce the removed post-configure sidebar sync as a same-run control.
+        sidebar_snapshot, sidebar_metrics = probe.take()
+        guard_started = time.perf_counter_ns()
+        guard_error = integrity_guard(sidebar_snapshot.engine)
+        legacy_guard_ms = (time.perf_counter_ns() - guard_started) / 1_000_000
+        if guard_error:
+            raise AssertionError(f"synthetic human guard failed after legacy sidebar sync: {guard_error}")
+        legacy_sidebar_metrics.append(sidebar_metrics)
+        legacy_sidebar_guard_ms.append(legacy_guard_ms)
+
+    # The main-view sync occurs after sidebar actions in both variants.
+    main_snapshot, main_metrics = probe.take()
     guard_started = time.perf_counter_ns()
-    guard_error = integrity_guard(snapshot_2.engine)
-    guard_2_ms = (time.perf_counter_ns() - guard_started) / 1_000_000
+    guard_error = integrity_guard(main_snapshot.engine)
+    main_guard_ms = (time.perf_counter_ns() - guard_started) / 1_000_000
     if guard_error:
         raise AssertionError(f"synthetic human guard failed before main view: {guard_error}")
 
     projection_started = time.perf_counter_ns()
-    view = project_view(snapshot_2.engine, viewer_seat=human_seat)
+    view = project_view(main_snapshot.engine, viewer_seat=human_seat)
     projection_ms = (time.perf_counter_ns() - projection_started) / 1_000_000
 
     feed_started = time.perf_counter_ns()
@@ -254,10 +267,10 @@ def profile_page_refresh(service, probe, human_seat, integrity_guard):
     return {
         "total_ms": (time.perf_counter_ns() - refresh_started) / 1_000_000,
         "configure_ms": configure_ms,
-        "integrity_guard_ms": [guard_1_ms, guard_2_ms],
+        "integrity_guard_ms": [guard_1_ms, *legacy_sidebar_guard_ms, main_guard_ms],
         "projection_ms": projection_ms,
         "feed_selection_ms": feed_ms,
-        "snapshots": [metrics_1, metrics_2],
+        "snapshots": [metrics_1, *legacy_sidebar_metrics, main_metrics],
         "visible_feed_rows": len(feed[0]),
         "unseen_rows": feed[1],
         "feed_truncated": feed[2],
@@ -276,22 +289,47 @@ def profile_case(public_rows, repeats, integrity_guard):
         probe = SnapshotProbe(service)
         try:
             for _ in range(2):
-                profile_page_refresh(service, probe, human_seat, integrity_guard)
-            profiles = [
-                profile_page_refresh(service, probe, human_seat, integrity_guard)
-                for _ in range(repeats)
-            ]
-            snapshots = [sample for profile in profiles for sample in profile["snapshots"]]
+                profile_page_refresh(service, probe, human_seat, integrity_guard, snapshot_count=2)
+                profile_page_refresh(service, probe, human_seat, integrity_guard, snapshot_count=3)
+
+            profiles_two = []
+            profiles_three = []
+            for iteration in range(repeats):
+                # Alternate order to reduce systematic warm-cache / runner drift bias.
+                order = (2, 3) if iteration % 2 == 0 else (3, 2)
+                measured = {}
+                for count in order:
+                    measured[count] = profile_page_refresh(
+                        service, probe, human_seat, integrity_guard, snapshot_count=count
+                    )
+                profiles_two.append(measured[2])
+                profiles_three.append(measured[3])
+
+            snapshots = [sample for profile in profiles_two for sample in profile["snapshots"]]
             guards = [
-                value for profile in profiles
+                value for profile in profiles_two
                 for value in profile["integrity_guard_ms"]
+            ]
+            paired_deltas = [
+                legacy["total_ms"] - current["total_ms"]
+                for current, legacy in zip(profiles_two, profiles_three)
+            ]
+            paired_savings = [
+                100.0 * delta / legacy["total_ms"]
+                for delta, legacy in zip(paired_deltas, profiles_three)
+                if legacy["total_ms"] > 0
             ]
             return {
                 "public_rows": public_rows,
                 "reasoning_rows": sum(len(rows) for rows in engine.reasoning_log.values()),
                 "snapshots_per_refresh": NORMAL_ACTIVE_REFRESH_SNAPSHOT_CALLS,
-                "page_refresh": _stats([profile["total_ms"] for profile in profiles]),
-                "configure": _stats([profile["configure_ms"] for profile in profiles]),
+                "page_refresh": _stats([profile["total_ms"] for profile in profiles_two]),
+                "legacy_three_snapshot_page_refresh": _stats([
+                    profile["total_ms"] for profile in profiles_three
+                ]),
+                "paired_page_refresh_delta_ms": _stats(paired_deltas),
+                "paired_page_refresh_saving_pct": _stats(paired_savings),
+                "configure": _stats([profile["configure_ms"] for profile in profiles_two]),
                 "snapshot_total": _stats([sample["total_ms"] for sample in snapshots]),
                 "snapshot_lock_wait": _stats([sample["lock_wait_ms"] for sample in snapshots]),
                 "snapshot_lock_hold": _stats([sample["lock_hold_ms"] for sample in snapshots]),
@@ -301,14 +339,14 @@ def profile_case(public_rows, repeats, integrity_guard):
                 ),
                 "integrity_guard_per_call": _stats(guards),
                 "integrity_guard_per_refresh": _stats([
-                    sum(profile["integrity_guard_ms"]) for profile in profiles
+                    sum(profile["integrity_guard_ms"]) for profile in profiles_two
                 ]),
-                "projection": _stats([profile["projection_ms"] for profile in profiles]),
+                "projection": _stats([profile["projection_ms"] for profile in profiles_two]),
                 "feed_selection": _stats([
-                    profile["feed_selection_ms"] for profile in profiles
+                    profile["feed_selection_ms"] for profile in profiles_two
                 ]),
                 "visible_feed_rows_median": round(statistics.median(
-                    profile["visible_feed_rows"] for profile in profiles
+                    profile["visible_feed_rows"] for profile in profiles_two
                 ), 1),
             }
         finally:
@@ -420,15 +458,19 @@ def render_markdown(payload):
         "",
         "## Isolated normal page-refresh data path",
         "",
-        "| Events | Page data path median / P95 (ms) | Snapshot median / P95 (ms) | "
-        "Lock wait median (ms) | Lock hold median (ms) | deepcopy median (ms) | "
-        "Integrity guard per call median (ms) | Projection median (ms) | Feed median (ms) |",
-        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Events | Current 2-snapshot path P50 / P95 (ms) | Legacy 3-snapshot path P50 / P95 (ms) | "
+        "Paired delta P50 (ms) | Paired saving P50 (%) | Single snapshot P50 / P95 (ms) | "
+        "Lock wait P50 (ms) | Lock hold P50 (ms) | deepcopy P50 (ms) | Guard/call P50 (ms) | Projection P50 (ms) | Feed P50 (ms) |",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for case in payload["cases"]:
         lines.append(
             f"| {case['public_rows']:,} "
             f"| {case['page_refresh']['median_ms']:.2f} / {case['page_refresh']['p95_ms']:.2f} "
+            f"| {case['legacy_three_snapshot_page_refresh']['median_ms']:.2f} / "
+            f"{case['legacy_three_snapshot_page_refresh']['p95_ms']:.2f} "
+            f"| {case['paired_page_refresh_delta_ms']['median_ms']:.2f} "
+            f"| {case['paired_page_refresh_saving_pct']['median_ms']:.1f} "
             f"| {case['snapshot_total']['median_ms']:.2f} / {case['snapshot_total']['p95_ms']:.2f} "
             f"| {case['snapshot_lock_wait']['median_ms']:.3f} "
             f"| {case['snapshot_lock_hold']['median_ms']:.2f} "
@@ -464,6 +506,7 @@ def render_markdown(payload):
         "- Snapshot lock hold measures the Condition critical section, including engine deep copies and manager/runtime diagnostics.",
         "- Deepcopy time counts copy.deepcopy calls made by GameService.snapshot; it excludes project_view's separately imported deepcopy calls.",
         "- Integrity-guard timing runs the exact self-contained function extracted from app.py; synthetic human-seat records are marked as human actions.",
+        "- The current two-snapshot path is compared in the same process with a legacy three-snapshot control; the paired delta is more useful than cross-run absolute timing.",
         "- The refresh harness reproduces the active-game state/data path, not Streamlit component rendering, websocket delivery, browser paint, or network latency.",
         "- The contention case uses a no-network pulse generator. It is a repeatable scheduling/lock stressor, not a production model-throughput estimate.",
         "- GitHub Actions runners are shared; compare medians and scaling, not absolute millisecond values across unrelated runs.",
@@ -519,6 +562,14 @@ def main():
             f"snapshot={case['snapshot_total']['median_ms']:.3f}ms; "
             f"lock={case['snapshot_lock_hold']['median_ms']:.3f}ms; "
             f"deepcopy={case['snapshot_deepcopy']['median_ms']:.3f}ms",
+            flush=True,
+        )
+        print(
+            f"PAGE-REFRESH-AB {size:6d} events: "
+            f"2-snapshot={case['page_refresh']['median_ms']:.3f}ms; "
+            f"legacy-3-snapshot={case['legacy_three_snapshot_page_refresh']['median_ms']:.3f}ms; "
+            f"paired-delta={case['paired_page_refresh_delta_ms']['median_ms']:.3f}ms "
+            f"({case['paired_page_refresh_saving_pct']['median_ms']:.1f}% of legacy)",
             flush=True,
         )
 
