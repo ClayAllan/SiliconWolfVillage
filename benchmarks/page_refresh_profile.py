@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 from benchmarks import snapshot_baseline as baseline
 from service import game_service as service_module
 from service.game_service import GameService
-from service.live_feed import select_feed_window
+from service.live_feed import feed_identity, prepare_feed_state, select_feed_window
 from service.view_projection import project_view
 
 
@@ -213,7 +213,7 @@ def profile_page_refresh(service, probe, human_seat, integrity_guard):
         raise AssertionError(f"synthetic human guard failed on first sync: {guard_error}")
 
     configure_started = time.perf_counter_ns()
-    service.configure(automatic=True, delay=0.6, turbo=False)
+    service.configure(automatic=True, delay=0.6, turbo=False,\n                      react_budget=getattr(snapshot_1.engine, "react_budget", None))
     configure_ms = (time.perf_counter_ns() - configure_started) / 1_000_000
 
     snapshot_2, metrics_2 = probe.take()
@@ -235,12 +235,20 @@ def profile_page_refresh(service, probe, human_seat, integrity_guard):
     projection_ms = (time.perf_counter_ns() - projection_started) / 1_000_000
 
     feed_started = time.perf_counter_ns()
-    feed_state = {"feed_follow_latest": True, "_feed_seen_seq": 0}
+    channel = "全部动态"
+    feed_state = {"viewer_mode": "单一视角", "viewer_seat": human_seat}
+    prepare_feed_state(feed_state, (view.game_id, "单一视角", human_seat))
+    identity = feed_identity(view.game_id, "单一视角", human_seat, channel)
+    if feed_state.get("_feed_channel_identity") != identity:
+        feed_state["_feed_channel_identity"] = identity
+        feed_state["_feed_scroll_action"] = None
+        feed_state["_feed_seen_seq"] = 0
+        feed_state["_feed_mark_seen"] = True
     feed = select_feed_window(
         feed_state,
         view.public_log,
         show_god=False,
-        channel="全部动态",
+        channel=channel,
         full_history=False,
         limit=90,
     )
