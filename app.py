@@ -33,7 +33,7 @@ from ui.feed_ui import render_feed
 
 # 手动进度存档与自动终局档案分开保存。
 # 该标记用于区分线上实际运行的构建与尚未部署的 main/PR 代码。
-APP_BUILD_MARKER = "SWV-20261030-STARLETTE-141-FIX"
+APP_BUILD_MARKER = "SWV-20261030-HUMAN-STATE-V1"
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Keep this key stable with storage.archive_zip.PRIVATE_ARCHIVE_ZIP_CACHE_KEY.
@@ -715,9 +715,14 @@ with st.sidebar:
 
     # ===== 💾 存档 / 读档（V6.0）=====
     with st.expander("💾 存档 / 读档"):
-        st.caption("先暂停再保存；若仍在等待玩家，单步收集已完成的响应或跳过当前玩家后再保存。")
+        st.caption("保存前请暂停自动推演、等待模型响应结束；真人行动未提交时请先提交，不能跳过或保存待处理的真人输入。")
         if engine:
-            _busy = bool(auto_running or engine.has_pending_action() or engine.manager.has_pending())
+            _busy = bool(
+                auto_running or engine.has_pending_action() or engine.manager.has_pending()
+                or getattr(engine, "pending_human_action", None)
+            )
+            if getattr(engine, "pending_human_action", None):
+                st.caption("正在等待真人行动：请先在主界面提交当前行动，再保存进度。")
             if st.button("💾 保存当前进度", use_container_width=True, disabled=_busy):
                 try:
                     nm = ss.game_service.save(SAVE_DIR)
@@ -959,13 +964,16 @@ with st.container(key="playback"):
             except (ValueError, RuntimeError) as error:
                 st.error(str(error))
     pause_label = "⏸️ 暂停" if ss.running else "▶️ 继续"
-    if pause_col.button(pause_label, use_container_width=True, disabled=live_engine is None or ss.done):
+    human_pending = bool(live_engine and getattr(live_engine, "pending_human_action", None))
+    if pause_col.button(pause_label, use_container_width=True,
+                        disabled=live_engine is None or ss.done or (not ss.running and human_pending)):
         if ss.running:
             ss.game_service.pause()
         else:
             ss.game_service.play()
         st.rerun()
-    if step_col.button("⏭️ 单步", use_container_width=True, disabled=live_engine is None or ss.done or auto_running):
+    if step_col.button("⏭️ 单步", use_container_width=True,
+                       disabled=live_engine is None or ss.done or auto_running or human_pending):
         advance_step()
         st.rerun()
     can_skip = bool(live_engine and not ss.done and live_engine.has_pending_action())

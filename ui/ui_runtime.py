@@ -4,7 +4,7 @@
 AUTO_POLL_SECONDS = 1.5
 VISIBLE_RERUN_FLOOR_SECONDS = 0.6
 TURBO_FLOOR_SECONDS = 0.05
-WAITING_EVENT_TYPES = frozenset({"waiting", "compress_waiting"})
+WAITING_EVENT_TYPES = frozenset({"waiting", "compress_waiting", "human_waiting"})
 
 SPEED_PRESETS = {
     "0.5x 慢速品读": 1.5,
