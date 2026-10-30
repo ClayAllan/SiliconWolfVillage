@@ -7,6 +7,7 @@ on:
       - perf/snapshot-baseline-seat-balance
       - fix/live-feed-window-exit
       - perf/page-refresh-diagnostics
+      - perf/reduce-active-refresh-snapshots
     paths:
       - benchmarks/snapshot_baseline.py
       - benchmarks/page_refresh_profile.py

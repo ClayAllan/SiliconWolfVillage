@@ -33,7 +33,7 @@ from ui.feed_ui import render_feed
 
 # 手动进度存档与自动终局档案分开保存。
 # 该标记用于区分线上实际运行的构建与尚未部署的 main/PR 代码。
-APP_BUILD_MARKER = "SWV-20261030-LIVE-FEED-V1"
+APP_BUILD_MARKER = "SWV-20261030-REFRESH-2SNAP-V1"
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Keep this key stable with storage.archive_zip.PRIVATE_ARCHIVE_ZIP_CACHE_KEY.
@@ -512,7 +512,9 @@ with st.sidebar:
 
     if ss.game_service is not None:
         ss.game_service.configure(automatic=auto, delay=delay, turbo=is_turbo, react_budget=react_budget)
-        engine = sync_game_state()
+        # configure() updates scheduling flags and react_budget for future steps.
+        # Sidebar reads use the initial snapshot; the main view takes a fresh one
+        # below, after sidebar actions have run. This avoids an intermediate copy.
     auto_running = bool(auto and ss.running and not ss.done)
     model_settings = dict(api_key=api_key, base_url=base_url, good_model=good_model,
                           wolf_model=wolf_model, temperature=temperature, agent_timeout=agent_timeout,
